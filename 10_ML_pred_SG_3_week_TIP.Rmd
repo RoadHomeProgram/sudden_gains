@@ -1,0 +1,211 @@
+---
+title: "revisit ML prediction in thre week"
+author: "ryan schubert"
+date: "2/25/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(ranger)
+library(gbm)
+library(caret)
+library(tidyr)
+library(data.table)
+library(plotrix)
+library(ggplot2)
+library(viridis)
+library(lme4)
+library(lmerTest)
+library(caret)
+library(ROCR)
+library(naniar)
+library(suddengains)
+"%&%" = function(a,b) paste0(a,b)
+set.seed(1234)
+```
+
+```{r cars}
+out.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/sudden gains/"
+dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/ML project/datasets/3 Week IOP/"
+# list.files(dir)
+rawData<-fread(dir %&% "IOP_DATA_SET_6-12-2020 with Manual Corrections copy.csv" ,na=c("-"))
+# colnames(rawData)[grepl("AGE",colnames(rawData))]
+PCL_Data<-rawData %>% select(one_of("PAT_ID","PCL_SCORE","PCL_DAY" %&% 1:14,"MSTYN","AGE_AT_COHORT_START","gender"))
+
+duplicated_PAT_ID<-PCL_Data$PAT_ID[duplicated(PCL_Data$PAT_ID)] %>% unique()
+
+PCL_Data<-PCL_Data %>% filter(!(PAT_ID %in% duplicated_PAT_ID))
+PCL_with_outcome<-PCL_Data %>% filter(!is.na(PCL_DAY14))
+```
+
+
+```{r}
+count_not_na<-function(vec){
+  sum(!is.na(vec))
+}
+
+count_not_na_windowise<-function(vec,window=5,n_sess=5){
+  mod<-(length(vec) - window + 1)
+  windowise<-rep(NA,mod)
+  for (i in 1:mod){
+    windowise[i]<-(sum(!is.na(vec[i:(i+window-1)])) >=n_sess)
+  }
+  return(windowise)
+}
+
+summarise_windowise<-function(vec){
+  sum(count_not_na_windowise(vec)) >=1
+}
+summarise_windowise(c(1,1,1,NA,1,1,1,1,1))
+
+available_data<-PCL_Data %>%
+  select(starts_with("PCL")) %>%
+  apply(1,summarise_windowise)
+sufficient_data<-PCL_Data %>% 
+  mutate(not_na=available_data) %>%
+  filter(available_data==T,
+         !is.na(PCL_DAY14),
+         !is.na(PCL_SCORE))
+vis_miss(sufficient_data)
+```
+
+
+```{r}
+cutoff<-define_crit1_cutoff(data_sd=sufficient_data$PCL_SCORE,reliability=0.84)
+vars<-colnames(PCL_Data)[2:11]
+byperson <- create_byperson(data = sufficient_data,
+                    sg_crit1_cutoff=cutoff$reliable_change_value,
+                    id_var_name = "PAT_ID",
+                    tx_start_var_name = "PCL_SCORE",
+                    tx_end_var_name = "PCL_DAY14",
+                    sg_var_list=vars,
+                    identify_sg_1to2=T,
+                    sg_measure_name = "PCL",
+                    identify = "sg")
+byperson$sg_crit123
+table(byperson$sg_reversal)
+byperson <- byperson %>% mutate(stable_sg=if_else(sg_crit123 == 1 & sg_reversal != 1, 1,0))
+table(byperson$stable_sg)
+table(byperson$stable_sg)/nrow(byperson)
+table(byperson$sg_freq_byperson)
+cutoff$reliable_change_value
+summary(byperson$sg_session_n)
+
+
+```
+
+
+```{r}
+outcomes<-byperson %>% select(PAT_ID,stable_sg)
+vars<-c("PAT_ID",
+        "PCL" %&% 1:20,
+        "PTCI" %&% 1:33,
+        "PHQ" %&% 1:9,
+        "NSI" %&% 1:22,
+        "AUDITC" %&% 1:3,
+        "MIES" %&% 1:11,
+        "MSTYN",
+        "gender",
+        "AGE_AT_COHORT_START",
+        "FirstRace",
+        "Ethnicity")
+modeling_data<-rawData %>% select(one_of(vars)) %>% 
+  right_join(outcomes,by=c("PAT_ID")) %>%
+  mutate(FirstRace=if_else(FirstRace=="White","White","Nonwhite"),
+         Ethnicity=if_else(Ethnicity=="Hispanic or Latino","H","NH"),
+         stable_sg=if_else(stable_sg==1,"SG","NoSG"),
+         stable_sg=as.factor(stable_sg)) %>%
+  select(-PAT_ID)
+```
+
+```{r}
+
+k<-10
+folds<-createFolds(modeling_data$stable_sg,k=k,list=F)
+table(folds,modeling_data$stable_sg)
+
+svm_tunegrid<-expand.grid(degree=c(1:3),scale=c(0.01,0.001, 0.0001),C = c(0.1,1,10,50))
+rf_grid<-expand.grid(mtry = 2,splitrule = c("gini","extratrees"),min.node.size = c(1, 3, 5))
+gbm_tunegrid<-expand.grid(interaction.depth = c(1,2),n.trees = c(500),shrinkage = c(0.001,0.01,0.1),n.minobsinnode = c(1,3,5))
+
+rf_roc<-rep(NA,k)
+svm_roc<-rep(NA,k)
+gbm_roc<-rep(NA,k)
+
+rf_sens<-rep(NA,k)
+svm_sens<-rep(NA,k)
+gbm_sens<-rep(NA,k)
+
+rf_spec<-rep(NA,k)
+svm_spec<-rep(NA,k)
+gbm_spec<-rep(NA,k)
+for (i in 1:k){
+  holdin<-modeling_data[i!=folds,]
+  holdout<-modeling_data[i==folds,]
+  
+    gbm_ctrl <- trainControl(method="cv", number=5, returnResamp="all",classProbs=TRUE,summaryFunction=twoClassSummary)
+  gbm_model <- caret::train(stable_sg ~ .,data=holdin,method = "gbm", trControl = gbm_ctrl,verbose=F,metric='ROC',distribution="bernoulli",tuneGrid = gbm_tunegrid)
+  
+  svm_ctrl <- trainControl(method="cv", number=5, returnResamp="all",classProbs=TRUE,summaryFunction=twoClassSummary)
+  svm_model <- caret::train(stable_sg ~ .,data=holdin,method = "svmPoly", trControl = svm_ctrl,verbose=F,metric='ROC',distribution="bernoulli",tuneGrid = svm_tunegrid)
+  
+  rf_ctrl <- trainControl(method="cv", number=5, returnResamp = "all",classProbs=TRUE)
+  rf_model<- caret::train(stable_sg ~ .,data =holdin,method = "ranger",verbose=F,trControl = rf_ctrl,metric="ROC",distribution="bernoulli",tuneGrid = rf_grid)
+  
+  #get performance
+  preds<-predict(rf_model,holdout,type="prob")[,1]
+  predObj<-ROCR::prediction(preds,holdout$stable_sg)
+  perf<-ROCR::performance(predObj,"auc")
+  rf_roc[i]<-perf@y.values[[1]]
+  preds<-predict(rf_model,holdout) %>% factor(levels=c("NoSG","SG"))
+  rf_rates<-table(preds ,holdout$stable_sg)/colSums(table(preds,holdout$stable_sg))
+  rf_spec[i]<-rf_rates[1,1]
+  rf_sens[i]<-rf_rates[2,2]
+  print(rf_rates)
+  
+  preds<-predict(svm_model,holdout,type="prob")[,1]
+  predObj<-ROCR::prediction(preds,holdout$stable_sg)
+  perf<-ROCR::performance(predObj,"auc")
+  svm_roc[i]<-perf@y.values[[1]]
+  preds<-predict(svm_model,holdout) %>% factor(levels=c("NoSG","SG"))
+  svm_rates<-table(preds,holdout$stable_sg)/colSums(table(preds,holdout$stable_sg))
+  svm_spec[i]<-svm_rates[1,1]
+  svm_sens[i]<-svm_rates[2,2]
+  
+    preds<-predict(gbm_model,holdout,type="prob")[,1]
+  predObj<-ROCR::prediction(preds,holdout$stable_sg)
+  perf<-ROCR::performance(predObj,"auc")
+  gbm_roc[i]<-perf@y.values[[1]]
+  preds<-predict(gbm_model,holdout) %>% factor(levels=c("NoSG","SG"))
+  gbm_rates<-table(preds,holdout$stable_sg)/colSums(table(preds,holdout$stable_sg))
+  gbm_spec[i]<-gbm_rates[1,1]
+  gbm_sens[i]<-gbm_rates[2,2]
+}
+print(1-svm_roc)
+mean(1-svm_roc)
+print(1-rf_roc)
+mean(1-rf_roc)
+print(1-gbm_roc)
+mean(1-gbm_roc)
+
+svm_sens[is.na(svm_sens)]<-0
+rf_sens[is.na(rf_sens)]<-0
+gbm_sens[is.na(gbm_sens)]<-0
+
+svm_spec[is.na(svm_spec)]<-0
+rf_spec[is.na(rf_spec)]<-0
+gbm_spec[is.na(gbm_spec)]<-0
+
+mean(svm_sens)
+mean(svm_spec)
+
+mean(rf_sens)
+mean(rf_spec)
+
+mean(gbm_sens)
+mean(gbm_spec)
+
+
+```
+

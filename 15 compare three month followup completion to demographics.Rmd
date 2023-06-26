@@ -1,0 +1,334 @@
+---
+title: "3 month available compare dropout data"
+author: "ryan schubert"
+date: "5/11/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(data.table)
+library(dplyr)
+library(psych)
+library(readxl)
+"%&%" = function(a,b) paste0(a,b)
+checkCol=function(string,df,ignore.case=T){
+  colnames(df)[grepl(string,colnames(df),ignore.case=ignore.case)]
+}
+```
+
+We just want to check if people who have 3 month followup data differ in any meaningful way to people who do not have 3 month followup in both ITPs
+
+do they differ in terms of
+PCL-5, PHQ-9, PTCI
+
+number of sudden gains
+
+and gender, age, race, mstyn, ethnicity
+
+
+
+```{r}
+sg.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/sudden gains/"
+three_week_mrns<-fread(sg.dir %&% "three_week_sufficient_data.csv") %>% select(MRN) %>% unlist()
+dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/cannabis use/"
+completeData<-read_xlsx(dir %&% 'IOP_DATA_SET_6-12-2020 with Manual Corrections.xlsx',na = "-") %>%
+  select(one_of(c("MRN","PAT_ID","COHORT","COHORT_TYPE","AGE_AT_COHORT_START","FirstRace","gender","Ethnicity","DAYSABST" %&% 1:8,"DAYSABST" %&% 1:8 %&% "_POST","PCL_SCORE","PCL_SCORE_3MON","PCL" %&% 1:20,"PHQ" %&% 1:9,"PCL_DAY" %&% 2:14,"PHQ_SCORE","PHQ_DAY" %&% 2:14,"PHQ_SCORE_POST","AUDITC" %&% 1:3,"PTCI" %&% 1:33,"NSI" %&% 1:22,"MSTYN","PTCI_DAY4","PTCI_DAY9","PTCI_DAY14")),contains("PTCI_SCORE")) %>% 
+  filter(MRN %in% three_week_mrns) %>%
+  mutate(followup_dropout=is.na(PCL_SCORE_3MON),
+         FirstRace=if_else(FirstRace=="White","White","Non-White"),
+         Ethnicity=if_else(Ethnicity=="Hispanic or Latino","Hispanic or Latino","Not Hispanic or Latino"),
+         alcohol_use=DAYSABST1 + DAYSABST1_POST,
+         cannabis_use=DAYSABST2 + DAYSABST2_POST,
+         stimulant_use=DAYSABST3 + DAYSABST3_POST,
+         heroine_use=DAYSABST4 + DAYSABST4_POST,
+         opiate_use=DAYSABST5 + DAYSABST5_POST,
+         tobacco_use=DAYSABST6 + DAYSABST6_POST,
+         steroid_use=DAYSABST7 + DAYSABST7_POST,
+         other_use=DAYSABST8 + DAYSABST8_POST)
+```
+
+
+lets test the three scales we care about longitudinally
+
+PCL-5
+
+```{r}
+
+pcl5<-completeData %>%
+  select(MRN,MSTYN,FirstRace,gender,Ethnicity,followup_dropout,PCL_SCORE,contains("PCL_DAY")) %>%
+  pivot_longer(contains("PCL")) %>%
+  mutate(day=case_when(
+    grepl("PCL_SCORE",name) ~ "0",
+    T ~ gsub("PCL_DAY","",name) 
+  ),
+  day=as.numeric(day))
+  
+#plot
+pcl5_plot<-pcl5 %>%
+  group_by(day,followup_dropout) %>%
+  summarise(mean_score=mean(value,na.rm=T),
+            se_score=std.error(value,na.rm=T))
+ggplot(pcl5_plot) +
+  geom_path(aes(x=day,y=mean_score,colour=followup_dropout)) +
+  geom_errorbar(aes(x=day,y=mean_score,ymax=mean_score+se_score,ymin=mean_score-se_score,colour=followup_dropout)) +
+  geom_point(aes(x=day,y=mean_score,shape=followup_dropout))
+
+m1<-lmer(value ~ day*followup_dropout + MSTYN + FirstRace + gender + Ethnicity + (1 | MRN),data=pcl5)
+m2<-lmer(value ~ day*followup_dropout + MSTYN + FirstRace + gender + Ethnicity + (day | MRN),data=pcl5)
+summary(m2)
+#test
+```
+
+no significant interaction between followup dropout and time, no significant effect of followup dropout on pcl5
+
+phq9
+
+```{r}
+phq9<-completeData %>%
+  select(MRN,MSTYN,FirstRace,gender,Ethnicity,followup_dropout,PHQ_SCORE,contains("PHQ_DAY")) %>%
+  pivot_longer(contains("PHQ")) %>%
+  mutate(day=case_when(
+    grepl("PHQ_SCORE",name) ~ "0",
+    T ~ gsub("PHQ_DAY","",name) 
+  ),
+  day=as.numeric(day))
+  
+#plot
+phq9_plot<-phq9 %>%
+  group_by(day,followup_dropout) %>%
+  summarise(mean_score=mean(value,na.rm=T),
+            se_score=std.error(value,na.rm=T))
+ggplot(phq9_plot) +
+  geom_path(aes(x=day,y=mean_score,colour=followup_dropout)) +
+  geom_errorbar(aes(x=day,y=mean_score,ymax=mean_score+se_score,ymin=mean_score-se_score,colour=followup_dropout)) +
+  geom_point(aes(x=day,y=mean_score,shape=followup_dropout))
+
+m1<-lmer(value ~ day*followup_dropout + MSTYN + FirstRace + gender + Ethnicity + (1 | MRN),data=phq9)
+m2<-lmer(value ~ day*followup_dropout + MSTYN + FirstRace + gender + Ethnicity + (day | MRN),data=phq9)
+anova(m1,m2)
+summary(m2)
+
+```
+
+no difference in phq9 score over time or at baseline between individuals who have dropped out at 3 month and those who did not
+
+```{r}
+ptci<-completeData %>%
+  select(MRN,MSTYN,FirstRace,gender,Ethnicity,followup_dropout,contains("PTCI_")) %>%
+  select(-PTCI_SCORE_6MON) %>%
+  pivot_longer(contains("PTCI")) %>%
+  mutate(day=case_when(
+    grepl("PTCI_SCORE_POST",name) ~ "15",
+    grepl("PTCI_SCORE",name) ~ "0",
+    T ~ gsub("PTCI_DAY","",name)
+  ),
+  day=as.numeric(day))
+
+ptci_plot<-ptci %>%
+  group_by(day,followup_dropout) %>%
+  summarise(mean_score=mean(value,na.rm=T),
+            se_score=std.error(value,na.rm=T))
+ggplot(ptci_plot) +
+  geom_path(aes(x=day,y=mean_score,colour=followup_dropout)) +
+  geom_errorbar(aes(x=day,y=mean_score,ymax=mean_score+se_score,ymin=mean_score-se_score,colour=followup_dropout)) +
+  geom_point(aes(x=day,y=mean_score,shape=followup_dropout))
+
+m1<-lmer(value ~ day*followup_dropout + MSTYN + FirstRace + gender + Ethnicity + (1 | MRN),data=ptci)
+m2<-lmer(value ~ day*followup_dropout + MSTYN + FirstRace + gender + Ethnicity + (day | MRN),data=ptci)
+anova(m1,m2)
+summary(m2)
+```
+no difference in ptci score over time
+
+
+and gender, age, race, mstyn, ethnicity
+```{r}
+chisq.test(completeData$gender,completeData$followup_dropout)
+chisq.test(completeData$FirstRace,completeData$followup_dropout)
+chisq.test(completeData$Ethnicity,completeData$followup_dropout)
+chisq.test(completeData$MSTYN,completeData$followup_dropout)
+t.test(AGE_AT_COHORT_START ~ followup_dropout,data=completeData)
+```
+age is the only things significantly different, however age will liekly not survive a conservitive multiple test correction such as bonferroni
+
+magnitude and number of sudden gainers
+
+```{r}
+cutoff<-define_crit1_cutoff(data_sd=completeData$PCL_SCORE,reliability=0.84)
+PCL_Data<-completeData %>% select(MRN,PCL_SCORE,contains("PCL_DAY"))
+vars<-colnames(PCL_Data)[2:11]
+byperson <- create_byperson(data = completeData,
+                    sg_crit1_cutoff=cutoff$reliable_change_value,
+                    id_var_name = "MRN",
+                    tx_start_var_name = "PCL_SCORE",
+                    tx_end_var_name = "PCL_DAY14",
+                    sg_var_list=vars,
+                    identify_sg_1to2=T,
+                    sg_measure_name = "PCL",
+                    identify = "sg")
+byperson <- mutate(byperson,sg_stable=if_else(!is.na(sg_reversal) & sg_reversal==0,1,0))
+completeData<-byperson %>% select(MRN,sg_stable) %>%
+  inner_join(completeData,by=c("MRN"))
+chisq.test(completeData$sg_stable,completeData$followup_dropout)
+table(completeData$sg_stable,completeData$followup_dropout)
+
+
+```
+hm so people who had a stable sg were less likely to dropout at three month followup than people without. Wonder if this holds true in the two week data
+
+
+```{r}
+
+two_week_mrns<-fread(sg.dir %&% "two_week_sufficient_data.csv") %>% select(mrn) %>% unlist()
+dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/2week/"
+list.files(dir)
+rawData<-fread(dir %&% "Two_week_with_CAPS_2_17_22_extended.csv" ,na=c("-")) %>%
+  select(mrn,contains("pcl") | contains("phq") | contains("daysabst") | contains("ptci") | contains("nsi"),"FirstRace (group)",Ethnicity,Sex,Age,cohort_type_base, contains("mst")) %>% 
+  filter(mrn %in% two_week_mrns) %>%
+  mutate(followup_dropout=is.na(pcl5_score_pastmonth_3_month_followup),
+     FirstRace=if_else(`FirstRace (group)`=="White","White","Non-White"),
+     Ethnicity=if_else(Ethnicity=="Hispanic or Latino","Hispanic or Latino","Not Hispanic or Latino"),
+     mstyn = case_when(mst1_base == 1 ~ 1,
+                       mst2_base == 1 ~ 1,
+                       mst3_base == 1 ~ 1,
+                       cohort_type_base == 2 ~ 1,
+                       T ~ 0))
+```
+
+
+```{r}
+pcl5<-rawData %>%
+  select(mrn,mstyn,FirstRace,Sex,Ethnicity,followup_dropout,contains("pcl5_score")) %>%
+  select(-contains("_followup")) %>%
+  pivot_longer(contains("pcl5")) %>%
+  mutate(day=case_when(
+    name == "pcl5_score_pastmonth_base" ~ 0,
+    name == "pcl5_score_monday_week_1" ~ 1,
+    name == "pcl5_score_wednesday_week_1" ~ 3,
+    name == "pcl5_score_friday_week_1" ~ 5,
+    name == "pcl5_score_monday_week_2" ~ 6,
+    name == "pcl5_score_wednesday_week_2" ~ 8,
+    name == "pcl5_score_post" ~ 10),
+  day=as.numeric(day))
+  
+#plot
+pcl5_plot<-pcl5 %>%
+  group_by(day,followup_dropout) %>%
+  summarise(mean_score=mean(value,na.rm=T),
+            se_score=std.error(value,na.rm=T))
+ggplot(pcl5_plot) +
+  geom_path(aes(x=day,y=mean_score,colour=followup_dropout)) +
+  geom_errorbar(aes(x=day,y=mean_score,ymax=mean_score+se_score,ymin=mean_score-se_score,colour=followup_dropout)) +
+  geom_point(aes(x=day,y=mean_score,shape=followup_dropout))
+
+m1<-lmer(value ~ day*followup_dropout + mstyn + FirstRace + Sex + Ethnicity + (1 | mrn),data=pcl5)
+m2<-lmer(value ~ day*followup_dropout + mstyn + FirstRace + Sex + Ethnicity + (day | mrn),data=pcl5)
+anova(m1,m2)
+summary(m2)
+
+```
+
+phq 
+
+
+```{r}
+phq9<-rawData %>%
+  select(mrn,mstyn,FirstRace,Sex,Ethnicity,followup_dropout,contains("phq9_score")) %>%
+  select(-contains("_followup")) %>%
+  pivot_longer(contains("phq9")) %>%
+  mutate(day=case_when(
+    name == "phq9_score_base" ~ 0,
+    name == "phq9_score_monday_week_1" ~ 1,
+    name == "phq9_score_wednesday_week_1" ~ 3,
+    name == "phq9_score_friday_week_1" ~ 5,
+    name == "phq9_score_monday_week_2" ~ 6,
+    name == "phq9_score_wednesday_week_2" ~ 8,
+    name == "phq9_score_post" ~ 10),
+  day=as.numeric(day))
+  
+#plot
+phq9_plot<-phq9 %>%
+  group_by(day,followup_dropout) %>%
+  summarise(mean_score=mean(value,na.rm=T),
+            se_score=std.error(value,na.rm=T))
+ggplot(phq9_plot) +
+  geom_path(aes(x=day,y=mean_score,colour=followup_dropout)) +
+  geom_errorbar(aes(x=day,y=mean_score,ymax=mean_score+se_score,ymin=mean_score-se_score,colour=followup_dropout)) +
+  geom_point(aes(x=day,y=mean_score,shape=followup_dropout))
+
+m1<-lmer(value ~ day*followup_dropout + mstyn + FirstRace + Sex + Ethnicity + (1 | mrn),data=phq9)
+m2<-lmer(value ~ day*followup_dropout + mstyn + FirstRace + Sex + Ethnicity + (day | mrn),data=phq9)
+anova(m1,m2)
+summary(m2)
+
+```
+
+```{r}
+
+ptci<-rawData %>%
+  select(mrn,mstyn,FirstRace,Sex,Ethnicity,followup_dropout,contains("ptci_score")) %>%
+  select(-contains("_followup")) %>%
+  pivot_longer(contains("ptci")) %>%
+  mutate(day=case_when(
+    name == "ptci_score_base" ~ 0,
+    name == "ptci_score_thursday_week_1" ~ 4,
+    name == "ptci_score_thursday_week_2" ~ 9,
+    name == "ptci_score_post" ~ 10),
+  day=as.numeric(day))
+  
+#plot
+ptci_plot<-ptci %>%
+  group_by(day,followup_dropout) %>%
+  summarise(mean_score=mean(value,na.rm=T),
+            se_score=std.error(value,na.rm=T))
+ggplot(ptci_plot) +
+  geom_path(aes(x=day,y=mean_score,colour=followup_dropout)) +
+  geom_errorbar(aes(x=day,y=mean_score,ymax=mean_score+se_score,ymin=mean_score-se_score,colour=followup_dropout)) +
+  geom_point(aes(x=day,y=mean_score,shape=followup_dropout))
+
+m1<-lmer(value ~ day*followup_dropout + mstyn + FirstRace + Sex + Ethnicity + (1 | mrn),data=ptci)
+m2<-lmer(value ~ day*followup_dropout + mstyn + FirstRace + Sex + Ethnicity + (day | mrn),data=ptci)
+anova(m1,m2)
+summary(m2)
+
+
+```
+
+phq and ptci are not significantly different either
+
+
+and gender, age, race, mstyn, ethnicity and number of sudden gains
+
+```{r}
+chisq.test(rawData$Sex,rawData$followup_dropout)
+chisq.test(rawData$mstyn,rawData$followup_dropout)
+chisq.test(rawData$Ethnicity,rawData$followup_dropout)
+chisq.test(rawData$FirstRace,rawData$followup_dropout)
+t.test(Age ~ followup_dropout,data=rawData)
+```
+
+age didn't replicate nor did sex and mstyn. differences in sex and mst status may have more to do with changes in structure between the IOPs than anything
+
+now lets look at the number of sudden gains
+
+```{r}
+PCL_Data<-rawData %>% select(mrn,contains("pcl5_score")) %>% select(-contains("followup"))
+cutoff<-define_crit1_cutoff(data_sd=rawData$pcl5_score_pastmonth_base,reliability=0.84)
+vars<-colnames(PCL_Data)[2:8]
+byperson <- create_byperson(data = rawData,
+                    sg_crit1_cutoff=cutoff$reliable_change_value,
+                    id_var_name = "mrn",
+                    tx_start_var_name = "pcl5_score_pastmonth_base",
+                    tx_end_var_name = "pcl5_score_post",
+                    sg_var_list=vars,
+                    identify_sg_1to2=T,
+                    sg_measure_name = "PCL",
+                    identify = "sg")
+byperson <- mutate(byperson,sg_stable=if_else(!is.na(sg_reversal) & sg_reversal==0,1,0))
+rawData<-byperson %>% select(mrn,sg_stable) %>%
+  inner_join(rawData,by=c("mrn"))
+chisq.test(rawData$sg_stable,rawData$followup_dropout)
+table(rawData$sg_stable,rawData$followup_dropout)
+```
+
+looked at if there were significant differences between inidividuals who completed 3 month followup in both itps - there were a handful of signfiicant results, all of which failed to replicate between the two ITPs

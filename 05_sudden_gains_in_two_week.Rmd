@@ -1,0 +1,93 @@
+---
+title: "sudden gains in two week"
+author: "ryan schubert"
+date: "2/4/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(suddengains)
+library(dplyr)
+library(tidyr)
+"%&%" = function(a,b) paste0(a,b)
+set.seed(1234)
+```
+
+
+```{r}
+out.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/sudden gains/"
+dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/2week/"
+list.files(dir)
+rawData<-fread(dir %&% "2week_wide.csv" ,na=c("-"))
+ colnames(rawData)[grepl("pcl5_score",colnames(rawData))]
+PCL_Data<-rawData %>% select(mrn,contains("pcl5_score")) %>% select(-contains("followup"))
+colnames(PCL_Data)
+```
+
+```{r}
+
+cutoff<-define_crit1_cutoff(data_sd=PCL_Data$pcl5_score_pastmonth_base,reliability=0.84)
+
+vars<-colnames(PCL_Data)[-1]
+sg_values<-identify_sg(PCL_Data,
+            id_var_name = "mrn",
+            sg_var_list=vars,
+            sg_crit1_cutoff=cutoff$standard_error_difference,
+            sg_crit3 = T)
+
+sg<-sg_values %>% select(contains("sg_"))
+sg_vec<-rowSums(sg,na.rm=T) 
+table(sg_vec)/length(sg_vec)
+
+table(sg_vec)
+
+```
+
+```{r}
+byperson <- create_byperson(data = PCL_Data,
+                    sg_crit1_cutoff=cutoff$standard_error_difference,
+                    id_var_name = "mrn",
+                    tx_start_var_name = "pcl5_score_pastmonth_base",
+                    tx_end_var_name = "pcl5_score_post",
+                    sg_var_list=vars,
+                    identify_sg_1to2=T,
+                    sg_measure_name = "PCL",
+                    identify = "sg")
+table(byperson$sg_reversal)
+table(byperson$sg_crit123)/nrow(byperson)
+fwrite(byperson,out.dir %&% "sudden_gains_two_week.csv")
+```
+
+```{r}
+b1<-byperson %>%
+  mutate(sg_crit123=if_else(sg_crit123==1,"SG","noSG")) %>%
+  ggplot(aes(x=sg_crit123)) +
+  geom_bar() +
+  theme_bw() +
+  labs(x="Sudden Gain Status")
+b1
+ggsave(sg.dir %&% "barplot_sg_in_two_week_total.png",dpi=300,height=4.9,width=7,plot=b1)
+```
+
+
+
+
+```{r}
+PCL_Data<-PCL_Data[complete.cases(PCL_Data),]
+byperson <- create_byperson(data = PCL_Data,
+                    sg_crit1_cutoff=cutoff$standard_error_difference,
+                    id_var_name = "mrn",
+                    tx_start_var_name = "pcl5_score_pastmonth_base",
+                    tx_end_var_name = "pcl5_score_post",
+                    sg_var_list=vars,
+                    identify_sg_1to2=T,
+                    sg_measure_name = "PCL",
+                    identify = "sg")
+table(byperson$sg_crit123)
+table(byperson$sg_reversal)
+fwrite(byperson,out.dir %&% "complete_cases_sudden_gains_two_week.csv")
+```
+
+
+
+

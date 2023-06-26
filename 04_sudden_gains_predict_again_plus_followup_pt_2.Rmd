@@ -1,0 +1,294 @@
+---
+title: "sg analyses"
+author: "ryan schubert"
+date: "1/31/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(data.table)
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(caret)
+library(naniar)
+library(visdat)
+library(car)
+library(MatchIt)
+library(kernlab)
+"%&%" = function(a,b) paste0(a,b)
+set.seed(1234)
+```
+
+Questions to answer
+
+
+## How many sudden gainers are also fast responders? Steady responders? etc
+
+```{r}
+sg.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/sudden gains/"
+traj.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/ML project/datasets/trajectories/"
+
+trajectories<-read_xlsx(traj.dir %&% "XDeID_IOP_DATA_SET_6.24.2020_noDup_IDsorted_completers_no123.xlsx",na=c("-","Not Available","Refusal"))
+
+trajectories<-select(trajectories,trajectory,id) %>% 
+  mutate(id=id %&% "000000")
+trajectories$id
+# list.files(sg.dir)
+sudden_gains<-fread(sg.dir %&% "sudden_gains.csv")
+sudden_gains<-sudden_gains %>% mutate(PAT_ID=as.character(PAT_ID))
+
+sg_data<-inner_join(sudden_gains,trajectories,by=c("PAT_ID"="id"))
+table(sg_data$sg_crit123,sg_data$trajectory)
+
+trajectories<-read_xlsx(traj.dir %&% "XDeID_IOP_DATA_SET_6.24.2020_noDup_IDsorted_completers_no123.xlsx",na=c("-","Not Available","Refusal"))
+PCL_DATA<-trajectories %>% select(id,contains("PCL_"),trajectory)
+PCL_DATA<-pivot_longer(PCL_DATA,
+                       !c(id,trajectory)) %>%
+  group_by(trajectory,name) %>%
+  summarise(mean_score=mean(value,na.rm=T)) %>%
+  mutate(name=factor(name,levels=c("PCL_SCORE","PCL_DAY2","PCL_DAY3","PCL_DAY5","PCL_DAY6","PCL_DAY8","PCL_DAY10","PCL_DAY11","PCL_DAY13","PCL_DAY14","PCL_SCORE_POST")),
+         trajectory=as.factor(trajectory))
+ggplot(PCL_DATA,aes(x=name,y=mean_score)) +
+  geom_point(aes(shape=trajectory)) +
+  geom_line(aes(group=trajectory,colour=trajectory)) +
+  theme_bw()
+```
+```{r}
+plot_proportions<-table(sg_data$sg_crit123,sg_data$trajectory) %>% as.data.frame() %>%
+  mutate(Var1=if_else(Var1==1,"SG","NoSG"),
+         Var2=case_when(
+           Var2== 1 ~ "Fast Responder",
+           Var2== 2 ~ "Steady Responder",
+           Var2== 3 ~ "Partial Responder",
+           Var2== 4 ~ "Minimal Responder"
+         ),
+         Var2=factor(Var2,levels=c("Fast Responder","Steady Responder","Partial Responder","Minimal Responder")))
+
+c1<-ggplot(plot_proportions,aes(x=Var1,y=Freq)) +
+  geom_col(aes(fill=Var2)) +
+  theme_bw() +
+  labs(fill="Trajectory",x="Sudden Gain Status",y="N Participants")
+c2<-ggplot(plot_proportions,aes(x=Var1,y=Freq)) +
+  geom_col(aes(fill=Var2),position = "fill",stat = "identity") +
+  scale_y_continuous(labels = scales::percent_format()) + 
+  theme_bw() +
+  labs(fill="Trajectory",x="Sudden Gain Status",y="N Participants")
+
+ggsave(sg.dir %&% "Bar_plot_SG_vs_trajectory.png",dpi=300,height=4.9,width=7,plot=c1)
+ggsave(sg.dir %&% "Bar_plot_SG_vs_trajectory_sclaed_percentage.png",dpi=300,height=4.9,width=7,plot=c2)
+```
+
+sudden gains may be a phenomenon related to trajectories.individuals with a sudden gain are more likely to be categorized to be in trajectories 1-3, and unlikely to be categorized into trajectory 4 (minimal response). Individuals without a sg are more likely to be categorized into 2-4, and unlikely to be categorized into trajectory 1 (fast response).
+
+
+## Are sudden gains associated with better outcomes? Better followup?
+
+Are sudden gains associated with better followup if you adjust for the total amount of change experienced by participants? VIF ~ 3
+
+```{r}
+
+sg_tag<-sudden_gains %>%
+  select(PAT_ID,sg_crit123)
+
+scores<-trajectories %>% select(id, gender, AGE_AT_COHORT_START,COHORT,MSTYN,contains("PCL_"),contains("PHQ_")) %>%
+  mutate(id=id %&% "000000")
+colnames(scores)
+modeling_data<-scores %>% inner_join(sg_tag,by=c("id"="PAT_ID")) %>%
+  mutate(PCL_delta=PCL_DAY14-PCL_SCORE,
+         PHQ_delta=PHQ_SCORE_POST-PHQ_SCORE) %>% filter(!(COHORT %in% 1:3))
+shapiro.test(modeling_data$PCL_delta)
+histogram(modeling_data$PCL_delta)
+histogram(modeling_data$PHQ_delta)
+qqnorm(modeling_data$PCL_delta)
+qqline(modeling_data$PCL_delta)
+
+qqnorm(modeling_data$PHQ_delta)
+qqline(modeling_data$PHQ_delta)
+
+m1<-glm(PCL_DAY14 ~ gender + AGE_AT_COHORT_START + MSTYN + PCL_SCORE + sg_crit123,data=modeling_data)
+summary(m1)
+m2<-glm(PHQ_SCORE_POST ~ gender + AGE_AT_COHORT_START + MSTYN + PHQ_SCORE + sg_crit123,data=modeling_data)
+summary(m2)
+vif(m1)
+```
+
+sudden gains appear to be related to lower scores at post, however it remains unclear whether sudden gains are causal for large changes in score, or whether large changes in score take on the appearance of sudden gains after the fact
+
+```{r}
+#extract the followup scores
+
+pcl.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/ML project/datasets/3 Week IOP/"
+rawData<-fread(pcl.dir %&% "IOP_DATA_SET_6-12-2020 with Manual Corrections copy.csv" ,na=c("-"))
+
+PCL_with_followup<-rawData %>% select(PAT_ID,contains("PCL_") & contains("MON"),contains("PHQ_") & contains("MON")) %>%
+  mutate(PAT_ID=as.character(PAT_ID))
+
+histogram(PCL_with_followup$PCL_SCORE_3MON)
+
+qqnorm(PCL_with_followup$PCL_SCORE_3MON)
+qqline(PCL_with_followup$PCL_SCORE_3MON)
+
+followup_modeling_data<-inner_join(modeling_data,PCL_with_followup,by=c("id"="PAT_ID"))
+fm1<-glm(PCL_SCORE_3MON ~ gender + AGE_AT_COHORT_START + MSTYN + PCL_SCORE + PCL_delta + sg_crit123,data=followup_modeling_data)
+summary(fm1)
+fm2<-glm(PHQ_SCORE_3MON ~ gender + AGE_AT_COHORT_START + MSTYN + PHQ_SCORE + PHQ_delta + sg_crit123,data=followup_modeling_data)
+summary(fm2)
+
+vif(fm1)
+vif(fm2)
+
+plot(fm1)
+plot(fm2)
+```
+
+if you only adjust for the total change, then SG is still significantly associated with lower scores at followup, but if you adjust for total change and baseline PCL score then SG is not significantly associated with lower scores at followup
+
+So an in treatment sudden gain itself does not sufficiently capture enough variability in followup scores to describe effects that are not described by the total amount of change a person experiences over the course of treatment. 
+
+
+lets try a matching to demonstrate this further
+
+lets match according to age, gender, baseline total and total change
+
+```{r}
+followup_modeling_data_subset <- followup_modeling_data %>%
+  filter(!is.na(PCL_SCORE_3MON),!is.na(PCL_delta))
+vis_miss(followup_modeling_data_subset)
+match_results<-matchit(sg_crit123 ~ PCL_delta + gender + AGE_AT_COHORT_START  + MSTYN,method="genetic",data=followup_modeling_data_subset)
+match_data<-match.data(match_results)
+
+match_data %>%
+  group_by(sg_crit123) %>%
+  select(sg_crit123,PCL_SCORE,PCL_DAY14,PCL_delta,gender,AGE_AT_COHORT_START ,MSTYN) %>%
+  summarise_all(funs(mean))
+
+ggplot(followup_modeling_data_subset,aes(x=PCL_delta)) +
+  geom_histogram() +
+  facet_wrap(~sg_crit123,scales="fixed",ncol=1) + 
+  xlim(-80,30)
+```
+It seems we cannot balance these groups with respect to PCL_DAY14 or PCL_delta, not enough samples and the "treatment" is too confounded with PCL_delta 
+
+## How do previously identified predictors perform at actually predicting SG - look at shalom paper in particular
+
+lets just do a bunch of ttests then test correct 
+
+lets ttest on ptci score, phq score, pcl score, nsi score, nsi validity, mies score, caps score, audit c,  age, 
+
+chisq for gender, mst status, 
+
+```{r}
+
+testing_data<-trajectories %>%
+  mutate(id=id %&% "000000") %>% 
+  inner_join(sg_tag,by=c("id"="PAT_ID")) 
+testing_data$AGE_AT_COHORT_START
+
+t.test(PHQ_SCORE ~ sg_crit123,data=testing_data)
+t.test(PHQ_SCORE_POST ~ sg_crit123,dat=testing_data)
+
+t.test(PCL_SCORE ~ sg_crit123,data=testing_data)
+t.test(PCL_DAY14 ~ sg_crit123,data=testing_data)
+
+t.test(PTCI_SCORE ~ sg_crit123,data=testing_data)
+t.test(PTCI_SCORE_POST ~ sg_crit123,data=testing_data)
+
+t.test(NSI_SCORE ~ sg_crit123,data=testing_data)
+t.test(NSI_SCORE_POST ~ sg_crit123,data=testing_data)
+
+t.test(MIES_SCORE ~ sg_crit123,data=testing_data)
+
+t.test(CAPS_SCORE ~ sg_crit123,data=testing_data)
+
+t.test(AUDITC_SCORE ~ sg_crit123,data=testing_data)
+
+t.test(AGE_AT_COHORT_START ~ sg_crit123,data=testing_data)
+
+chisq.test(table(testing_data$gender,testing_data$sg_crit123))
+chisq.test(table(testing_data$MSTYN,testing_data$sg_crit123))
+```
+
+all of these psychological scales are significantly different at baseline, however these differences tend to be small so I don't expect these to be highly predictive of of SG
+
+```{r}
+vars<-c("sg_crit123",
+        "PCL" %&% 1:20,
+        "PTCI" %&% 1:33,
+        "PHQ" %&% 1:9,
+        "NSI" %&% 1:22,
+        "AUDITC" %&% 1:3,
+        "MIES" %&% 1:11,
+        "COHORT_TYPE",
+        "gender",
+        "AGE_AT_COHORT_START",
+        "FirstRace",
+        "Ethnicity")
+
+modeling_data<-testing_data %>% select(one_of(vars)) %>%
+  mutate(FirstRace=if_else(FirstRace=="White","White","Nonwhite"),
+         Ethnicity=if_else(Ethnicity=="Hispanic or Latino","H","NH"),
+         sg_crit123=if_else(sg_crit123==1,"SG","NoSG"),
+         sg_crit123=as.factor(sg_crit123)) %>% filter(complete.cases(.))
+vis_miss(modeling_data)
+```
+
+
+lets do a random forest and an elastic net
+
+```{r}
+
+k<-10
+folds<-createFolds(modeling_data$sg_crit123,k=k,list=F)
+table(folds,modeling_data$sg_crit123)
+
+svm_tunegrid<-expand.grid(degree=c(1:3),scale=c(0.01,0.001, 0.0001),C = c(0.1,1,10,50))
+rf_grid<-expand.grid(mtry = 2,splitrule = c("gini","extratrees"),min.node.size = c(1, 3, 5))
+gbm_tunegrid<-expand.grid(interaction.depth = c(1,2),n.trees = c(500),shrinkage = c(0.001,0.01,0.1),n.minobsinnode = c(1,3,5))
+
+rf_roc<-rep(NA,k)
+svm_roc<-rep(NA,k)
+gbm_roc<-rep(NA,k)
+for (i in 1:k){
+  holdin<-modeling_data[i!=folds,]
+  holdout<-modeling_data[i==folds,]
+  
+    gbm_ctrl <- trainControl(method="cv", number=5, returnResamp="all",classProbs=TRUE,summaryFunction=twoClassSummary)
+  gbm_model <- caret::train(sg_crit123 ~ .,data=holdin,method = "gbm", trControl = gbm_ctrl,verbose=F,metric='ROC',distribution="bernoulli",tuneGrid = gbm_tunegrid)
+  
+  svm_ctrl <- trainControl(method="cv", number=5, returnResamp="all",classProbs=TRUE,summaryFunction=twoClassSummary)
+  svm_model <- caret::train(sg_crit123 ~ .,data=holdin,method = "svmPoly", trControl = svm_ctrl,verbose=F,metric='ROC',distribution="bernoulli",tuneGrid = svm_tunegrid)
+  
+  rf_ctrl <- trainControl(method="cv", number=5, returnResamp = "all",classProbs=TRUE)
+  rf_model<- caret::train(sg_crit123 ~ .,data =holdin,method = "ranger",verbose=F,trControl = rf_ctrl,metric="ROC",distribution="bernoulli",tuneGrid = rf_grid)
+  
+  #get performance
+  preds<-predict(rf_model,holdout,type="prob")[,1]
+  predObj<-ROCR::prediction(preds,holdout$sg_crit123)
+  perf<-ROCR::performance(predObj,"auc")
+  rf_roc[i]<-perf@y.values[[1]]
+  
+  preds<-predict(svm_model,holdout,type="prob")[,1]
+  predObj<-ROCR::prediction(preds,holdout$sg_crit123)
+  perf<-ROCR::performance(predObj,"auc")
+  svm_roc[i]<-perf@y.values[[1]]
+  
+    preds<-predict(gbm_model,holdout,type="prob")[,1]
+  predObj<-ROCR::prediction(preds,holdout$sg_crit123)
+  perf<-ROCR::performance(predObj,"auc")
+  gbm_roc[i]<-perf@y.values[[1]]
+}
+print(1-svm_roc)
+mean(1-svm_roc)
+print(1-rf_roc)
+mean(1-rf_roc)
+print(1-gbm_roc)
+mean(1-gbm_roc)
+```
+
+
+
+How do sudden gains look in two week?
+
+Do we see sudden gains?

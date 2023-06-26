@@ -1,0 +1,56 @@
+---
+title: "cronbach's alphas SG paper"
+author: "ryan schubert"
+date: "4/6/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(data.table)
+library(dplyr)
+library(psych)
+library(readxl)
+"%&%" = function(a,b) paste0(a,b)
+```
+
+```{r}
+sg.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/sudden gains/"
+three_week_mrns<-fread(sg.dir %&% "three_week_sufficient_data.csv") %>% select(MRN) %>% unlist()
+dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/cannabis use/"
+completeData<-read_xlsx(dir %&% 'IOP_DATA_SET_6-12-2020 with Manual Corrections.xlsx',na = "-") %>%
+  select(one_of(c("MRN","PAT_ID","COHORT","COHORT_TYPE","AGE_AT_COHORT_START","gender","DAYSABST" %&% 1:8,"DAYSABST" %&% 1:8 %&% "_POST","PCL_SCORE","PCL" %&% 1:20,"PHQ" %&% 1:9,"PCL_DAY" %&% 2:14,"PHQ_SCORE","PHQ_DAY" %&% 2:14,"PHQ_SCORE_POST","AUDITC" %&% 1:3,"PTCI" %&% 1:33,"NSI" %&% 1:22,"MIES" %&% 1:11))) %>%
+  filter(MRN %in% three_week_mrns) 
+
+pcl_data<-completeData %>% select(one_of("PCL" %&% 1:20))
+phq_data<-completeData %>% select(PHQ1:PHQ9)
+ptci_data<-completeData %>% select(PTCI1:PTCI33)
+nsi_data<-completeData %>% select(NSI1:NSI22)
+mies_data<-completeData %>% select(MIES1:MIES11)
+alpha(pcl_data)
+alpha(phq_data)
+alpha(ptci_data)
+alpha(nsi_data)
+alpha(mies_data)
+```
+
+```{r}
+two_week_mrns<-fread(sg.dir %&% "two_week_sufficient_data.csv") %>% select(mrn) %>% unlist()
+dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/2week/"
+list.files(dir)
+rawData<-fread(dir %&% "Two_week_with_CAPS_2_25_22_extended.csv" ,na=c("-")) %>%
+  select(mrn,contains("pcl") | contains("phq") | contains("daysabst") | contains("ptci") | contains("nsi") | contains("mies"),Sex,Age,cohort_type_base) %>%
+  select(-contains("followup"))  %>% 
+  filter(mrn %in% two_week_mrns)
+  
+
+pcl_data<-rawData %>% select(pcl1_pastmonth_base:pcl20_pastmonth_base)
+phq_data<-rawData %>% select("phq" %&% 1:9 %&% "_base")
+ptci_data<-rawData %>% select("ptci" %&% 1:33 %&% "_base")
+nsi_data<-rawData %>% select("nsi" %&% 1:22 %&% "_base")
+mies_data<-rawData %>% select("mies" %&% 1:11 %&% "_base")
+alpha(pcl_data)
+alpha(phq_data)
+alpha(ptci_data)
+alpha(nsi_data)
+psych::alpha(mies_data)
+```

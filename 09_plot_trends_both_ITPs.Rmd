@@ -1,0 +1,295 @@
+---
+title: "plot_pcl_trends"
+author: "ryan schubert"
+date: "2/24/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(suddengains)
+library(data.table)
+library(lme4)
+library(mice)
+library(dplyr)
+library(broom.mixed)
+library(tidyr)
+library(ggplot2)
+library(plotrix)
+library(naniar)
+library(psych)
+library(lmerTest)
+"%&%" = function(a,b) paste0(a,b)
+set.seed(1234)
+library(cowplot)
+```
+
+```{r cars}
+out.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/sudden gains/"
+dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/ML project/datasets/3 Week IOP/"
+# list.files(dir)
+rawData<-fread(dir %&% "IOP_DATA_SET_6-12-2020 with Manual Corrections copy.csv" ,na=c("-"))
+colnames(rawData)[grepl("PCL_SCORE",colnames(rawData))]
+PCL_Data<-rawData %>% select(one_of("PAT_ID","PCL_SCORE","PCL_DAY" %&% 1:14,"MSTYN","AGE_AT_COHORT_START","gender")) 
+
+duplicated_PAT_ID<-PCL_Data$PAT_ID[duplicated(PCL_Data$PAT_ID)] %>% unique()
+
+PCL_Data<-PCL_Data %>% filter(!(PAT_ID %in% duplicated_PAT_ID))
+PCL_with_outcome<-PCL_Data %>% filter(!is.na(PCL_DAY14))
+```
+
+```{r}
+count_not_na<-function(vec){
+  sum(!is.na(vec))
+}
+
+count_not_na_windowise<-function(vec,window=5,n_sess=5){
+  mod<-(length(vec) - window + 1)
+  windowise<-rep(NA,mod)
+  for (i in 1:mod){
+    windowise[i]<-(sum(!is.na(vec[i:(i+window-1)])) >=n_sess)
+  }
+  return(windowise)
+}
+
+summarise_windowise<-function(vec){
+  sum(count_not_na_windowise(vec)) >=1
+}
+summarise_windowise(c(1,1,1,NA,1,1,1,1,1))
+
+available_data<-PCL_Data %>%
+  select(starts_with("PCL")) %>%
+  apply(1,summarise_windowise)
+sufficient_data<-PCL_Data %>% 
+  mutate(not_na=available_data) %>%
+  filter(available_data==T,
+         !is.na(PCL_DAY14),
+         !is.na(PCL_SCORE))
+vis_miss(sufficient_data)
+```
+
+```{r}
+cutoff<-define_crit1_cutoff(data_sd=sufficient_data$PCL_SCORE,reliability=0.84)
+vars<-colnames(PCL_Data)[2:11]
+byperson <- create_byperson(data = sufficient_data,
+                    sg_crit1_cutoff=cutoff$reliable_change_value,
+                    id_var_name = "PAT_ID",
+                    tx_start_var_name = "PCL_SCORE",
+                    tx_end_var_name = "PCL_DAY14",
+                    sg_var_list=vars,
+                    identify_sg_1to2=T,
+                    sg_measure_name = "PCL",
+                    identify = "sg")
+byperson$sg_crit123
+table(byperson$sg_reversal)
+byperson <- byperson %>% mutate(stable_sg=if_else(sg_crit123 == 1 & sg_reversal != 1, 1,0))
+table(byperson$stable_sg)
+table(byperson$stable_sg)/nrow(byperson)
+table(byperson$sg_freq_byperson)
+cutoff$reliable_change_value
+summary(byperson$sg_session_n)
+
+```
+
+```{r}
+followup_data<-rawData %>% select(PAT_ID,PCL_SCORE_3MON)
+
+
+g_three_week_data<-byperson %>% 
+  left_join(followup_data,by=c("PAT_ID")) %>%
+  select(PAT_ID,stable_sg,starts_with("PCL")) %>%
+  pivot_longer(starts_with("PCL")) %>%
+  group_by(name,stable_sg) %>%
+  summarise(mean_score=mean(value,na.rm=T),
+            se_score=std.error(value,na.rm=T)) %>%
+  mutate(name=case_when(
+    name == "PCL_SCORE" ~ "Baseline",
+    name == "PCL_DAY14" ~ "Post",
+    name == "PCL_SCORE_3MON" ~ "3 Mon",
+    name == "PCL_SCORE_6MON" ~ "6 Mon",
+    name == "PCL_SCORE_12MON" ~ "12 Mon",
+    T ~ gsub("PCL_DAY","Day ",name),
+  ),followup_index = grepl("3 Mon",name),
+  name=factor(name,levels=c("Baseline","Day 2","Day 3","Day 5","Day 6","Day 8","Day 10","Day 11","Day 13","Post","3 Mon","6 Mon","12 Mon")),
+    stable_sg=if_else(stable_sg==1,"Y","N"))
+g_three_week<-g_three_week_data %>%
+  ggplot(aes(x=name,y=mean_score)) +
+    geom_errorbar(aes(ymin=mean_score-se_score,ymax=mean_score+se_score,colour=as.factor(stable_sg)),width=0.5) +
+  geom_point(aes(shape=as.factor(stable_sg))) +
+  # geom_line(aes(group=stable_sg,colour=as.factor(stable_sg),linetype=followup_index)) 
+  stat_summary(data=subset(g_three_week_data,name %in% c("Post","3 Mon")),
+               fun.y=sum, geom="line",
+               aes(group=stable_sg,colour=as.factor(stable_sg),linetype='solid line')) +
+  stat_summary(data=subset(g_three_week_data,name %in% c("Baseline","Day 2","Day 3","Day 5","Day 6","Day 8","Day 10","Day 11","Day 13","Post")),
+               fun.y=sum, geom="line",
+               aes(group=stable_sg,colour=as.factor(stable_sg),linetype='dashed line')) +
+  geom_point(aes(shape=as.factor(stable_sg))) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=45,hjust=1)) + ylab("PCL-5 Score") + labs(shape="Sudden Gain Experienced",colour="Sudden Gain Experienced") +
+  guides(linetype="none")
+g_three_week
+
+stats<-byperson %>% 
+  left_join(followup_data,by=c("PAT_ID")) %>%
+  select(PAT_ID,stable_sg,starts_with("PCL")) %>%
+  pivot_longer(starts_with("PCL")) %>%
+  group_by(name,stable_sg) %>%
+  summarise(mean_score=mean(value,na.rm=T),
+            se_score=std.error(value,na.rm=T),
+            sd_score=sd(value,na.rm=T))
+
+cohen.d(PCL_SCORE ~ stable_sg,data=byperson)
+cohen.d(PCL_DAY14 ~ stable_sg,data=byperson)
+three_week_SG<-byperson
+```
+
+
+```{r cars}
+out.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/sudden gains/"
+dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/2week/"
+list.files(dir)
+rawData<-fread(dir %&% "Two_week_with_CAPS_2_17_22_extended.csv" ,na=c("-"))
+colnames(rawData)[grepl("pcl5_score",colnames(rawData),ignore.case=T)]
+PCL_Data<-rawData %>% select(mrn,contains("pcl5_score"),contains("mst"),Age,Sex,cohort_type_base) %>%
+  select(-contains("followup")) %>%
+  mutate(MSTYN=case_when(
+    !is.na(mst1_base) & mst1_base == 1 ~ 1,
+    !is.na(mst2_base) & mst2_base == 1 ~ 1,
+    !is.na(mst3_base) & mst3_base == 1 ~ 1,
+    !is.na(cohort_type_base) & cohort_type_base == 2 ~ 1,
+    T ~ 0
+  ))
+duplicated_mrn<-PCL_Data$mrn[duplicated(PCL_Data$mrn)] %>% unique()
+
+PCL_Data<-PCL_Data %>% filter(!(mrn %in% duplicated_mrn))
+PCL_with_outcome<-PCL_Data %>% filter(!is.na(pcl5_score_post))
+```
+
+```{r}
+count_not_na<-function(vec){
+  sum(!is.na(vec))
+}
+
+count_not_na_windowise<-function(vec,window=5,n_sess=5){
+  mod<-(length(vec) - window + 1)
+  windowise<-rep(NA,mod)
+  for (i in 1:mod){
+    windowise[i]<-(sum(!is.na(vec[i:(i+window-1)])) >=n_sess)
+  }
+  return(windowise)
+}
+
+summarise_windowise<-function(vec){
+  sum(count_not_na_windowise(vec)) >=1
+}
+summarise_windowise(c(1,1,1,NA,1,1,1,1,1))
+
+available_data<-PCL_Data %>%
+  select(starts_with("pcl")) %>%
+  apply(1,summarise_windowise)
+sufficient_data<-PCL_Data %>% 
+  mutate(not_na=available_data) %>%
+  filter(available_data==T,
+         !is.na(pcl5_score_pastmonth_base),
+         !is.na(pcl5_score_post))
+vis_miss(sufficient_data)
+```
+
+
+```{r}
+cutoff<-define_crit1_cutoff(data_sd=sufficient_data$pcl5_score_pastmonth_base,reliability=0.84)
+vars<-colnames(PCL_Data)[2:8]
+byperson <- create_byperson(data = sufficient_data,
+                    sg_crit1_cutoff=cutoff$reliable_change_value,
+                    id_var_name = "mrn",
+                    tx_start_var_name = "pcl5_score_pastmonth_base",
+                    tx_end_var_name = "pcl5_score_post",
+                    sg_var_list=vars,
+                    identify_sg_1to2=T,
+                    sg_measure_name = "PCL",
+                    identify = "sg")
+byperson$sg_crit123
+table(byperson$sg_reversal)
+byperson <- byperson %>% mutate(stable_sg=if_else(sg_crit123 == 1 & sg_reversal != 1, 1,0))
+table(byperson$stable_sg)
+table(byperson$stable_sg)/nrow(byperson)
+table(byperson$sg_freq_byperson)
+cutoff$reliable_change_value
+table(byperson$sg_session_n)
+summary(byperson$sg_session_n)
+
+
+```
+
+```{r}
+followup_data<-rawData %>% select(mrn,contains("pcl5_score")) %>% select(mrn,contains("3_month_followup"))
+byperson <- byperson %>% left_join(followup_data,by=c("mrn"))
+
+g_two_week_data<-byperson %>% 
+  select(mrn,stable_sg,starts_with("pcl")) %>%
+  pivot_longer(starts_with("pcl")) %>%
+  group_by(name,stable_sg) %>%
+  summarise(mean_score=mean(value,na.rm=T),
+            se_score=std.error(value,na.rm=T)) %>%
+  mutate(name=case_when(
+    name == "pcl5_score_pastmonth_base" ~ "Baseline",
+    name == "pcl5_score_monday_week_1" ~ "Day 1",
+    name == "pcl5_score_wednesday_week_1" ~ "Day 3",
+    name == "pcl5_score_friday_week_1" ~ "Day 5",
+    name == "pcl5_score_monday_week_2" ~ "Day 6",
+    name == "pcl5_score_wednesday_week_2" ~ "Day 8",
+    name == "pcl5_score_post" ~ "Post",
+    name == "pcl5_score_pastmonth_3_month_followup" ~ "3 Mon",
+    name == "pcl5_score_pastmonth_6_month_followup" ~ "6 Mon",
+    name == "pcl5_score_pastmonth_12_month_followup" ~ "12 Mon"),
+    name=factor(name,levels=c("Baseline","Day 1","Day 3","Day 5","Day 6","Day 8","Post","3 Mon","6 Mon","12 Mon")),
+    stable_sg=if_else(stable_sg==1,"Y","N"))
+g_two_week<-g_two_week_data %>%
+  ggplot(aes(x=name,y=mean_score)) +
+  # geom_line(aes(group=stable_sg,colour=as.factor(stable_sg))) +
+  geom_errorbar(aes(ymin=mean_score-se_score,ymax=mean_score+se_score,colour=as.factor(stable_sg)),width=0.5) +
+  geom_point(aes(shape=as.factor(stable_sg))) +
+    stat_summary(data=subset(g_two_week_data,name %in% c("Post","3 Mon")),
+               fun.y=sum, geom="line",
+               aes(group=stable_sg,colour=as.factor(stable_sg),linetype='solid line')) +
+  stat_summary(data=subset(g_two_week_data,name %in% c("Baseline","Day 1","Day 3","Day 5","Day 6","Day 8","Post")),
+               fun.y=sum, geom="line",
+               aes(group=stable_sg,colour=as.factor(stable_sg),linetype='dashed line')) +
+    geom_point(aes(shape=as.factor(stable_sg))) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=45,hjust=1)) + ylab("PCL-5 Score") + labs(shape="Sudden Gain Experienced",colour="Sudden Gain Experienced") +
+  guides(linetype="none")
+g_two_week
+
+stats<-byperson %>% 
+  select(mrn,stable_sg,starts_with("pcl")) %>%
+  pivot_longer(starts_with("pcl")) %>%
+  group_by(name,stable_sg) %>%
+  summarise(mean_score=mean(value,na.rm=T),
+            se_score=std.error(value,na.rm=T),
+            sd_score=sd(value,na.rm=T))
+
+
+two_week_SG<-byperson
+```
+
+```{r}
+legend<-get_legend(g_three_week + theme(legend.position = "bottom"))
+p<-plot_grid(g_three_week + theme(legend.position = "none") + xlab("3-week ITP") + ylim(18,57),
+          g_two_week + theme(legend.position = "none",axis.title.y = element_blank()) + xlab("2-week ITP") + ylim(18,57),
+          ncol=2,
+          labels=c("A","B"),
+          rel_widths = c(1,0.95))
+p1<-plot_grid(p,legend,ncol = 1,rel_heights = c(1,0.1))
+ggsave(out.dir %&% "PCL-5 Trends Both ITPS.png",height=4.9,width=7,dpi=300,plot=p1)
+```
+
+
+compare itps sg magnitude
+
+```{r}
+t1<-three_week_SG %>% filter(stable_sg == 1)
+t2<-two_week_SG %>% filter(stable_sg == 1)
+
+t.test(t1$sg_magnitude,t2$sg_magnitude)
+```
+

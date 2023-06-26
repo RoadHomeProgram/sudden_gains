@@ -1,0 +1,212 @@
+---
+title: "compare sudden gainers"
+author: "ryan schubert"
+date: "12/28/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(data.table)
+library(plotrix)
+library(ggplot2)
+library(viridis)
+library(lme4)
+library(lmerTest)
+"%&%" = function(a,b) paste0(a,b)
+set.seed(1234)
+```
+
+## R Markdown
+
+```{r cars}
+pcl.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/ML project/datasets/3 Week IOP/"
+data.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/sudden gains/"
+out.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/sudden gains/"
+```
+
+## Including Plots
+
+```{r}
+rawData<-fread(pcl.dir %&% "IOP_DATA_SET_6-12-2020 with Manual Corrections copy.csv" ,na=c("-"))
+colnames(rawData)[grepl("mst",colnames(rawData),ignore.case=T)]
+PCL_Data<-rawData %>% 
+  dplyr::select(one_of("PAT_ID","PCL_SCORE","PCL_DAY" %&% 1:14),gender,AGE_AT_COHORT_START,MSTYN) %>%
+  mutate(gender=if_else(gender=="Female",1,0))
+
+
+duplicated_PAT_ID<-PCL_Data$PAT_ID[duplicated(PCL_Data$PAT_ID)] %>% unique()
+
+PCL_Data<-PCL_Data %>% 
+  filter(!(PAT_ID %in% duplicated_PAT_ID)) %>%
+  mutate(delta_PCL=PCL_SCORE-PCL_DAY14,
+         CMI=delta_PCL>=10)
+```
+
+```{r}
+sg<-fread(out.dir %&% "complete_cases_sudden_gains.csv")
+hist(sg$sg_session_n)
+sg<-sg %>% mutate(reliable_sg=case_when(
+  sg_reversal==0 ~ 1,
+  is.na(sg_reversal) ~ 0,
+  T ~ 0)) %>% 
+  dplyr::select(PAT_ID,reliable_sg)
+sg_Data<-filter(PCL_Data,PAT_ID %in% sg$PAT_ID)  %>%
+  inner_join(sg,by="PAT_ID")
+
+
+```
+
+so what I want to know is two things,
+
+how do sudden gains compare to no sudden gains
+
+how do sudden gains compare to no sudden gains conditional on each individual being a responder
+
+First lets simply use regression based methods
+
+# sudden gains vs no sudden gains
+
+```{r}
+modeling_data<-sg_Data %>%
+  pivot_longer(PCL_SCORE:PCL_DAY14) %>%
+  mutate(name=factor(name,levels=c("PCL_SCORE","PCL_DAY2","PCL_DAY3","PCL_DAY5","PCL_DAY6","PCL_DAY8","PCL_DAY10", "PCL_DAY11","PCL_DAY13","PCL_DAY14")))
+
+mixed_model<-lmer(value ~ name*reliable_sg + AGE_AT_COHORT_START + gender +  MSTYN + (1|PAT_ID),data=modeling_data)
+anova(mixed_model)
+
+plot_data<-modeling_data %>% 
+  group_by(name,reliable_sg) %>%
+  summarise(mean_score=mean(value),
+            ste_score=std.error(value)) %>%
+  mutate(name=factor(name,levels=c("PCL_SCORE","PCL_DAY2","PCL_DAY3","PCL_DAY5","PCL_DAY6","PCL_DAY8","PCL_DAY10", "PCL_DAY11","PCL_DAY13","PCL_DAY14")))
+
+ggplot(plot_data,aes(x=name,y=mean_score)) +
+  geom_line(aes(group=reliable_sg,colour=as.factor(reliable_sg))) +
+  geom_errorbar(aes(ymin=mean_score-ste_score,ymax=mean_score+ste_score,colour=as.factor(reliable_sg))) +
+  geom_point(aes(shape=as.factor(reliable_sg))) +
+  theme_bw()
+```
+
+#sudden gains vs no sudden gains conditional on everyone being a 10pt responder
+
+```{r}
+modeling_data<-sg_Data %>%
+  filter(CMI==T) %>%
+  pivot_longer(PCL_SCORE:PCL_DAY14) %>%
+  mutate(name=factor(name,levels=c("PCL_SCORE","PCL_DAY2","PCL_DAY3","PCL_DAY5","PCL_DAY6","PCL_DAY8","PCL_DAY10", "PCL_DAY11","PCL_DAY13","PCL_DAY14")))
+
+mixed_model<-lmer(value ~ name*reliable_sg + AGE_AT_COHORT_START + gender +  MSTYN + (1|PAT_ID),data=modeling_data)
+anova(mixed_model)
+
+plot_data<-modeling_data %>% 
+  group_by(name,reliable_sg) %>%
+  summarise(mean_score=mean(value),
+            ste_score=std.error(value)) %>%
+  mutate(name=factor(name,levels=c("PCL_SCORE","PCL_DAY2","PCL_DAY3","PCL_DAY5","PCL_DAY6","PCL_DAY8","PCL_DAY10", "PCL_DAY11","PCL_DAY13","PCL_DAY14")))
+
+ggplot(plot_data,aes(x=name,y=mean_score)) +
+  geom_line(aes(group=reliable_sg,colour=as.factor(reliable_sg))) +
+  geom_errorbar(aes(ymin=mean_score-ste_score,ymax=mean_score+ste_score,colour=as.factor(reliable_sg))) +
+  geom_point(aes(shape=as.factor(reliable_sg))) +
+  theme_bw()
+```
+
+Nikki wants to do a matched pairs design
+
+
+```{r}
+library(MatchIt)
+matched_data<-matchit(reliable_sg ~ PCL_SCORE + AGE_AT_COHORT_START + gender + MSTYN,
+                      data=sg_Data,
+                      distance="glm",
+                      link="logit",
+                      mahvars=~ PCL_SCORE + AGE_AT_COHORT_START + gender + MSTYN,
+                      calipers=0.25,
+                      replace=F)
+```
+
+
+```{r}
+pairs<-matched_data$match.matrix %>% 
+  as.data.frame() %>% 
+  rownames_to_column() %>%
+  rename(sg="rowname",no_sg="V1")
+matched_subset<-sg_Data %>%
+  rownames_to_column() %>%
+  mutate(Match_id=case_when(
+    rowname %in% pairs$sg ~ "sg",
+    rowname %in% pairs$no_sg ~ "no_sg"
+  )) %>%
+  filter(!is.na(Match_id))
+```
+
+for each pair we need to extract the index of the sessions surrounding the sg. Then we need to extract the PCL scores of the non sg individual in the pair and extract them in a matching format as outout by the describe_sg function
+
+```{r}
+row_to_PAT_ID<-sg_Data %>% dplyr::select(PAT_ID) %>% rownames_to_column()
+pairs<-pairs %>% 
+  inner_join(row_to_PAT_ID,by=c("sg"="rowname")) %>%
+  dplyr::select(-sg) %>%
+  rename(sg="PAT_ID") %>%
+  inner_join(row_to_PAT_ID,by=c("no_sg"="rowname")) %>%
+  dplyr::select(-no_sg) %>%
+  rename(nosg="PAT_ID")
+matched_only<-sg %>% filter(PAT_ID %in% pairs$sg | PAT_ID %in% pairs$nosg)
+
+for (i in 1:nrow(pairs)){
+  sg_instance<-filter(sg_only,PAT_ID==pairs$sg[i])
+  session_n<-sg_instance$sg_session_n
+  indices<-session_n + c(-2,-1,0,1,2,3)
+  indices<-indices[indices>=0 & indices <=9]
+  indices<-indices + 17
+  if(session_n==1){
+    placing_indices<-c(7:11)
+  }  else if (session_n==7) {
+    placing_indices<-c(6:10)
+  } else {
+    placing_indices<-c(6:11)
+  }
+  matched_only[matched_only$PAT_ID == pairs$nosg[i],placing_indices]<-matched_only[matched_only$PAT_ID == pairs$nosg[i],..indices]
+}
+
+matched_only<-matched_only %>%
+  mutate(Match_ID=case_when(sg_reversal==0~"sg",
+          is.na(sg_reversal)~"no_sg",
+          T~"no_sg"))
+```
+
+```{r}
+bysg<-create_bysg(matched_only,
+            sg_crit1_cutoff=6.8,
+            sg_measure_name="PCL",
+            id_var_name="PAT_ID",
+            tx_start_var_name="PCL_SCORE",
+            tx_end_var_name="PCL_DAY14",
+            sg_var_list=c("PCL_SCORE","PCL_DAY2","PCL_DAY3","PCL_DAY5","PCL_DAY6","PCL_DAY8","PCL_DAY10","PCL_DAY11","PCL_DAY13","PCL_DAY14"))
+
+sudden_gains_plot<-plot_sg(data=matched_only,
+        id_var_name="PAT_ID",
+        tx_start_var_name="PCL_SCORE",
+        tx_end_var_name="PCL_DAY14",
+        sg_pre_post_var_list=c("sg_PCL_2n","sg_PCL_1n","sg_PCL_n","sg_PCL_n1","sg_PCL_n2","sg_PCL_n3"),
+        ylab = "PCL-5 Score", xlab = "Session",
+        colour_group = "ggplot",
+        group_var_name = "Match_ID",
+        group_labels=c("no_sg","sg"),
+        group_levels=c("no_sg","sg")
+        )
+ggsave(out.dir %&% "Sudden_gains_matched_data.png",dpi=300,height=4.9,width=7,plot=sudden_gains_plot)
+```
+
+```{r}
+sg_only_outcome<-sg_Data %>% inner_join(pairs,by=c("PAT_ID"="sg")) %>% dplyr::select(PAT_ID,delta_PCL,nosg)
+nosg_only_outcome<-sg_Data %>% inner_join(pairs,by=c("PAT_ID"="nosg")) %>% dplyr::select(PAT_ID,delta_PCL,sg)
+comparable<-inner_join(sg_only_outcome,nosg_only_outcome,by=c("nosg"="PAT_ID"))
+t.test(comparable$delta_PCL.x,comparable$delta_PCL.y,paired = T)
+```
+
+
+
+

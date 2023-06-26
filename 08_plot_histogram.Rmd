@@ -1,0 +1,226 @@
+---
+title: "plot sudden gains day"
+author: "ryan schubert"
+date: "2/24/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(suddengains)
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(naniar)
+library(cowplot)
+library(ggplot2)
+library(grid)
+"%&%" = function(a,b) paste0(a,b)
+set.seed(1234)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+out.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/sudden gains/"
+dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/ML project/datasets/3 Week IOP/"
+# list.files(dir)
+rawData<-fread(dir %&% "IOP_DATA_SET_6-12-2020 with Manual Corrections copy.csv" ,na=c("-"))
+# colnames(rawData)[grepl("AGE",colnames(rawData))]
+PCL_Data<-rawData %>% select(one_of("PAT_ID","PCL_SCORE","PCL_DAY" %&% 1:14,"MSTYN","AGE_AT_COHORT_START","gender")) 
+
+duplicated_PAT_ID<-PCL_Data$PAT_ID[duplicated(PCL_Data$PAT_ID)] %>% unique()
+
+PCL_Data<-PCL_Data %>% filter(!(PAT_ID %in% duplicated_PAT_ID))
+PCL_with_outcome<-PCL_Data %>% filter(!is.na(PCL_DAY14))
+```
+
+
+```{r}
+count_not_na<-function(vec){
+  sum(!is.na(vec))
+}
+
+count_not_na_windowise<-function(vec,window=5,n_sess=5){
+  mod<-(length(vec) - window + 1)
+  windowise<-rep(NA,mod)
+  for (i in 1:mod){
+    windowise[i]<-(sum(!is.na(vec[i:(i+window-1)])) >=n_sess)
+  }
+  return(windowise)
+}
+
+summarise_windowise<-function(vec){
+  sum(count_not_na_windowise(vec)) >=1
+}
+summarise_windowise(c(1,1,1,NA,1,1,1,1,1))
+
+available_data<-PCL_Data %>%
+  select(starts_with("PCL")) %>%
+  apply(1,summarise_windowise)
+sufficient_data<-PCL_Data %>% 
+  mutate(not_na=available_data) %>%
+  filter(available_data==T,
+         !is.na(PCL_DAY14),
+         !is.na(PCL_SCORE))
+vis_miss(sufficient_data)
+```
+
+
+```{r}
+cutoff<-define_crit1_cutoff(data_sd=sufficient_data$PCL_SCORE,reliability=0.84)
+vars<-colnames(PCL_Data)[2:11]
+byperson <- create_byperson(data = sufficient_data,
+                    sg_crit1_cutoff=cutoff$reliable_change_value,
+                    id_var_name = "PAT_ID",
+                    tx_start_var_name = "PCL_SCORE",
+                    tx_end_var_name = "PCL_DAY14",
+                    sg_var_list=vars,
+                    identify_sg_1to2=T,
+                    sg_measure_name = "PCL",
+                    identify = "sg")
+byperson$sg_crit123
+table(byperson$sg_reversal)
+byperson <- byperson %>% mutate(stable_sg=if_else(sg_crit123 == 1 & sg_reversal != 1, 1,0))
+table(byperson$stable_sg)
+table(byperson$stable_sg)/nrow(byperson)
+table(byperson$sg_freq_byperson)
+cutoff$reliable_change_value
+summary(byperson$sg_session_n)
+# 2, 3, 5, 6, 8, 11, 13, 14, and 15
+h_three_week<-table(byperson$sg_session_n) %>%
+  as.data.frame() %>%
+  mutate(Var1=case_when(
+    Var1== 1 ~ 3,
+    Var1== 2 ~ 5,
+    Var1== 3 ~ 6,
+    Var1== 4 ~ 8,
+    Var1== 5 ~ 11,
+    Var1== 6 ~ 13,
+    Var1== 7 ~ 14
+      ), Var1=as.factor(Var1),
+    Freq=Freq/465*100,
+    label=round(Freq,1) %&% '%') %>%
+  ggplot(aes(x=Var1,y=Freq)) +
+  geom_col(aes(fill="1")) + 
+  geom_label(aes(label=label),size=2.5) + 
+  theme_bw() +
+  xlab("Day Sudden Gain Experienced") +
+  ylab("Percent")
+```
+
+
+
+
+```{r cars}
+out.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/sudden gains/"
+dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/2week/"
+list.files(dir)
+rawData<-fread(dir %&% "Two_week_with_CAPS_2_17_22_extended.csv" ,na=c("-"))
+colnames(rawData)[grepl("pcl5_score",colnames(rawData),ignore.case=T)]
+PCL_Data<-rawData %>% select(mrn,contains("pcl5_score"),contains("mst"),Age,Sex,cohort_type_base) %>%
+  select(-contains("followup")) %>%
+  mutate(MSTYN=case_when(
+    !is.na(mst1_base) & mst1_base == 1 ~ 1,
+    !is.na(mst2_base) & mst2_base == 1 ~ 1,
+    !is.na(mst3_base) & mst3_base == 1 ~ 1,
+    !is.na(cohort_type_base) & cohort_type_base == 2 ~ 1,
+    T ~ 0
+  ))
+duplicated_mrn<-PCL_Data$mrn[duplicated(PCL_Data$mrn)] %>% unique()
+
+PCL_Data<-PCL_Data %>% filter(!(mrn %in% duplicated_mrn))
+PCL_with_outcome<-PCL_Data %>% filter(!is.na(pcl5_score_post))
+```
+
+
+```{r}
+count_not_na<-function(vec){
+  sum(!is.na(vec))
+}
+
+count_not_na_windowise<-function(vec,window=5,n_sess=5){
+  mod<-(length(vec) - window + 1)
+  windowise<-rep(NA,mod)
+  for (i in 1:mod){
+    windowise[i]<-(sum(!is.na(vec[i:(i+window-1)])) >=n_sess)
+  }
+  return(windowise)
+}
+
+summarise_windowise<-function(vec){
+  sum(count_not_na_windowise(vec)) >=1
+}
+summarise_windowise(c(1,1,1,NA,1,1,1,1,1))
+
+available_data<-PCL_Data %>%
+  select(starts_with("pcl")) %>%
+  apply(1,summarise_windowise)
+sufficient_data<-PCL_Data %>% 
+  mutate(not_na=available_data) %>%
+  filter(available_data==T,
+         !is.na(pcl5_score_pastmonth_base),
+         !is.na(pcl5_score_post))
+vis_miss(sufficient_data)
+```
+
+
+```{r}
+cutoff<-define_crit1_cutoff(data_sd=sufficient_data$pcl5_score_pastmonth_base,reliability=0.84)
+vars<-colnames(PCL_Data)[2:8]
+byperson <- create_byperson(data = sufficient_data,
+                    sg_crit1_cutoff=cutoff$reliable_change_value,
+                    id_var_name = "mrn",
+                    tx_start_var_name = "pcl5_score_pastmonth_base",
+                    tx_end_var_name = "pcl5_score_post",
+                    sg_var_list=vars,
+                    identify_sg_1to2=T,
+                    sg_measure_name = "PCL",
+                    identify = "sg")
+byperson$sg_crit123
+table(byperson$sg_reversal)
+byperson <- byperson %>% mutate(stable_sg=if_else(sg_crit123 == 1 & sg_reversal != 1, 1,0))
+table(byperson$stable_sg)
+table(byperson$stable_sg)/nrow(byperson)
+table(byperson$sg_freq_byperson)
+cutoff$reliable_change_value
+table(byperson$sg_session_n)
+summary(byperson$sg_session_n)
+#1, 3, 5, 6, 8, and 10
+h_two_week<-table(byperson$sg_session_n) %>%
+  as.data.frame() %>%
+  mutate(Var1=case_when(
+    Var1== 1 ~ 3,
+    Var1== 2 ~ 5,
+    Var1== 3 ~ 6,
+    Var1== 4 ~ 8
+      ), Var1=as.factor(Var1),
+    Freq=Freq/235*100,
+    label=round(Freq,1) %&% '%') %>%
+  ggplot(aes(x=Var1,y=Freq)) +
+  geom_col(aes(fill="1")) + 
+  geom_label(aes(label=label),size=2.5) + 
+  theme_bw() +
+  xlab("Day Sudden Gain Experienced") +
+  ylab("Percent")
+h_two_week
+
+```
+
+```{r}
+h_three_week
+h_two_week
+
+
+p<-plot_grid(h_three_week + theme(axis.title.x = element_blank(),plot.title = element_text(hjust = 0.5),legend.position = "none") + ggtitle("3-Week ITP") + scale_fill_manual(values="#1D6F42") + ylim(0,10),
+          h_two_week + theme(plot.title = element_text(hjust = 0.5),legend.position = "none") + ggtitle("2-Week ITP") + scale_fill_manual(values="#1D6F42") + ylim(0,10),
+          ncol=1,
+          labels=c("A","B"),
+          rel_heights=c(0.95,1))
+p
+
+ggsave(out.dir %&% "histogram_day_of_sudden_gain.png",width=7,height=4.9,dpi=300,plot=p)
+```

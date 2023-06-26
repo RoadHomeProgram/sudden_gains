@@ -1,0 +1,101 @@
+---
+title: "sudden gains"
+author: "ryan schubert"
+date: "11/18/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(suddengains)
+library(dplyr)
+library(tidyr)
+"%&%" = function(a,b) paste0(a,b)
+set.seed(1234)
+```
+
+## R Markdown
+
+
+```{r cars}
+out.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/sudden gains/"
+dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/ML project/datasets/3 Week IOP/"
+# list.files(dir)
+rawData<-fread(dir %&% "IOP_DATA_SET_6-12-2020 with Manual Corrections copy.csv" ,na=c("-"))
+# colnames(rawData)[grepl("PCL_DAY",colnames(rawData))]
+PCL_Data<-rawData %>% select(one_of("PAT_ID","PCL_SCORE","PCL_DAY" %&% 1:14)) 
+
+duplicated_PAT_ID<-PCL_Data$PAT_ID[duplicated(PCL_Data$PAT_ID)] %>% unique()
+
+PCL_Data<-PCL_Data %>% filter(!(PAT_ID %in% duplicated_PAT_ID))
+```
+
+```{r}
+
+cutoff<-define_crit1_cutoff(data_sd=PCL_Data$PCL_SCORE,reliability=0.84)
+
+vars<-colnames(PCL_Data)[-1]
+sg_values<-identify_sg(PCL_Data,
+            id_var_name = "PAT_ID",
+            sg_var_list=vars,
+            sg_crit1_cutoff=cutoff$standard_error_difference,
+            sg_crit3 = T)
+
+sg<-sg_values %>% select(contains("sg_"))
+sg_vec<-rowSums(sg,na.rm=T) 
+table(sg_vec)/length(sg_vec)
+
+table(sg_vec)
+
+```
+
+so we have the transitions where a sudden gain is present, we need to identify the magnitude of these sudden gains to calculate the magnitude/threshold of a 50% reversal. We then just need to check if any subsequent time points are above the threshold. Thankfully the sudden gains package makes this easy for us and identifies if a person had a subsequent reversal using the 50% reversal threshold.
+
+
+
+```{r}
+byperson <- create_byperson(data = PCL_Data,
+                    sg_crit1_cutoff=cutoff$standard_error_difference,
+                    id_var_name = "PAT_ID",
+                    tx_start_var_name = "PCL_SCORE",
+                    tx_end_var_name = "PCL_DAY14",
+                    sg_var_list=vars,
+                    identify_sg_1to2=T,
+                    sg_measure_name = "PCL",
+                    identify = "sg")
+table(byperson$sg_reversal)
+fwrite(byperson,out.dir %&% "sudden_gains.csv")
+```
+
+of the 205 people who experienced at least one sudden gain, only 16 had a reversal, leaving 189 as having a sudden gain.
+
+```{r}
+
+sudden_gainers<-byperson %>% filter(sg_reversal==0)
+```
+
+what about in a complete case sense
+
+```{r}
+PCL_Data<-PCL_Data[complete.cases(PCL_Data),]
+byperson <- create_byperson(data = PCL_Data,
+                    sg_crit1_cutoff=cutoff$standard_error_difference,
+                    id_var_name = "PAT_ID",
+                    tx_start_var_name = "PCL_SCORE",
+                    tx_end_var_name = "PCL_DAY14",
+                    sg_var_list=vars,
+                    identify_sg_1to2=T,
+                    sg_measure_name = "PCL",
+                    identify = "sg")
+table(byperson$sg_reversal)
+```
+
+similar results looking at a complete case analysis. 168/390 individuals have a sudden gain, with only 12 of those having a reversal, meaning 156 individuals have a relable sudden gain
+
+```{r}
+
+fwrite(byperson,out.dir %&% "complete_cases_sudden_gains.csv")
+```
+
+
+
+

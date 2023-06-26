@@ -1,0 +1,195 @@
+---
+title: "followup missing data methods (?)"
+author: "ryan schubert"
+date: "2/23/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(suddengains)
+library(data.table)
+library(lme4)
+library(mice)
+library(dplyr)
+library(broom.mixed)
+library(tidyr)
+library(ggplot2)
+library(plotrix)
+library(naniar)
+library(lmerTest)
+"%&%" = function(a,b) paste0(a,b)
+set.seed(1234)
+```
+
+
+some studies assess follow-up (Wiedemann 2020)
+
+others do not assess follow-up
+
+```{r}
+out.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/sudden gains/"
+dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/ML project/datasets/3 Week IOP/"
+# list.files(dir)
+rawData<-fread(dir %&% "IOP_DATA_SET_6-12-2020 with Manual Corrections copy.csv" ,na=c("-"))
+# colnames(rawData)[grepl("AGE",colnames(rawData))]
+PCL_Data<-rawData %>% select(one_of("PAT_ID","PCL_SCORE","PCL_DAY" %&% 1:14,"MSTYN","AGE_AT_COHORT_START","gender")) 
+
+duplicated_PAT_ID<-PCL_Data$PAT_ID[duplicated(PCL_Data$PAT_ID)] %>% unique()
+
+PCL_Data<-PCL_Data %>% filter(!(PAT_ID %in% duplicated_PAT_ID))
+PCL_with_outcome<-PCL_Data %>% filter(!is.na(PCL_DAY14))
+
+```
+
+```{r}
+
+count_not_na<-function(vec){
+  sum(!is.na(vec))
+}
+
+count_not_na_windowise<-function(vec,window=5,n_sess=5){
+  mod<-(length(vec) - window + 1)
+  windowise<-rep(NA,mod)
+  for (i in 1:mod){
+    windowise[i]<-(sum(!is.na(vec[i:(i+window-1)])) >=n_sess)
+  }
+  return(windowise)
+}
+
+largestChange<-function(vec){
+  mod<-(length(vec) - 1)
+  windowise<-rep(NA,mod)
+  for (i in 1:mod){
+    windowise[i]<-(vec[i] - vec[(i+1)])
+  }
+  return(max(windowise,na.rm=T))
+}
+
+summarise_windowise<-function(vec){
+  sum(count_not_na_windowise(vec)) >=1
+}
+summarise_windowise(c(1,1,1,NA,1,1,1,1,1))
+
+available_data<-PCL_Data %>%
+  select(starts_with("PCL")) %>%
+  apply(1,summarise_windowise)
+sufficient_data<-PCL_Data %>% 
+  mutate(not_na=available_data) %>%
+  filter(available_data==T,
+         !is.na(PCL_DAY14),
+         !is.na(PCL_SCORE))
+vis_miss(sufficient_data)
+
+```
+
+
+```{r}
+
+cutoff<-define_crit1_cutoff(data_sd=sufficient_data$PCL_SCORE,reliability=0.84)
+vars<-colnames(PCL_Data)[2:11]
+byperson <- create_byperson(data = sufficient_data,
+                    sg_crit1_cutoff=cutoff$reliable_change_value,
+                    id_var_name = "PAT_ID",
+                    tx_start_var_name = "PCL_SCORE",
+                    tx_end_var_name = "PCL_DAY14",
+                    sg_var_list=vars,
+                    identify_sg_1to2=T,
+                    sg_measure_name = "PCL",
+                    identify = "sg")
+byperson$sg_crit123
+table(byperson$sg_reversal)
+byperson <- byperson %>% mutate(stable_sg=if_else(sg_crit123 == 1 & sg_reversal != 1, 1,0))
+table(byperson$stable_sg)/nrow(byperson)
+table(byperson$sg_freq_byperson)
+cutoff$reliable_change_value
+
+```
+
+```{r}
+tapply(byperson$sg_magnitude,byperson$stable_sg,mean)
+tapply(byperson$sg_magnitude,byperson$stable_sg,sd)
+tapply(byperson$sg_change_proportion,byperson$stable_sg,mean)
+```
+
+```{r}
+followup_Data<-rawData %>% select(PAT_ID,contains("PCL_SCORE") & contains("MON")) %>%
+  filter(PAT_ID %in% byperson$PAT_ID)
+byperson<-inner_join(byperson,followup_Data,by=c("PAT_ID"))
+table(byperson$stable_sg,!is.na(byperson$PCL_SCORE_3MON))
+table(byperson$stable_sg,!is.na(byperson$PCL_SCORE_6MON))
+table(byperson$stable_sg,!is.na(byperson$PCL_SCORE_12MON))
+
+table(!is.na(byperson$PCL_SCORE_3MON))/465
+table(!is.na(byperson$PCL_SCORE_6MON))/465
+table(!is.na(byperson$PCL_SCORE_12MON))/465
+
+
+table(!is.na(byperson$PCL_SCORE_3MON),byperson$stable_sg)/465
+table(!is.na(byperson$PCL_SCORE_6MON),byperson$stable_sg)/465
+table(!is.na(byperson$PCL_SCORE_12MON),byperson$stable_sg)/465
+
+table(!is.na(byperson$PCL_SCORE_3MON),byperson$stable_sg)
+table(!is.na(byperson$PCL_SCORE_6MON),byperson$stable_sg)
+table(!is.na(byperson$PCL_SCORE_12MON),byperson$stable_sg)
+```
+
+```{r}
+stable_sg_group<-byperson %>% filter(stable_sg==1)
+(mean(stable_sg_group$PCL_SCORE) - mean(stable_sg_group$PCL_DAY14))/sd(stable_sg_group$PCL_SCORE - stable_sg_group$PCL_DAY14)
+no_stable_sg_group<-byperson %>% filter(stable_sg==0)
+(mean(no_stable_sg_group$PCL_SCORE) - mean(no_stable_sg_group$PCL_DAY14))/sd(no_stable_sg_group$PCL_SCORE - no_stable_sg_group$PCL_DAY14)
+
+
+stable_sg_group<-stable_sg_group %>% filter(!is.na(PCL_SCORE_3MON))
+(mean(stable_sg_group$PCL_SCORE) - mean(stable_sg_group$PCL_SCORE_3MON))/sd(stable_sg_group$PCL_SCORE - stable_sg_group$PCL_SCORE_3MON)
+
+no_stable_sg_group<-no_stable_sg_group %>% filter(!is.na(PCL_SCORE_3MON))
+(mean(no_stable_sg_group$PCL_SCORE) - mean(no_stable_sg_group$PCL_SCORE_3MON))/sd(no_stable_sg_group$PCL_SCORE - no_stable_sg_group$PCL_SCORE_3MON)
+```
+
+```{r}
+
+largestDelta<-data.frame(PAT_ID=PCL_Data$PAT_ID,largestDelta=apply(PCL_Data[,2:8],1,largestChange))
+byperson<-byperson %>% mutate(delta_PCL=PCL_SCORE-PCL_DAY14) %>% inner_join(largestDelta,by=c('PAT_ID'))
+
+t.test(PCL_DAY14 ~ stable_sg,data=byperson)
+t.test(PCL_SCORE_3MON ~ stable_sg,data=byperson)
+t.test(PCL_SCORE_6MON ~ stable_sg,data=byperson)
+t.test(PCL_SCORE_12MON ~ stable_sg,data=byperson)
+
+m1<-lm(PCL_SCORE_3MON ~ delta_PCL +  MSTYN + stable_sg + AGE_AT_COHORT_START + gender + PCL_SCORE,data=byperson)
+m2<-lm(PCL_SCORE_6MON ~ delta_PCL + MSTYN + stable_sg + AGE_AT_COHORT_START + gender + PCL_SCORE,data=byperson)
+m3<-lm(PCL_SCORE_12MON ~ delta_PCL + MSTYN + stable_sg + AGE_AT_COHORT_START + gender + PCL_SCORE,data=byperson)
+
+summary(m1)
+summary(m2)
+summary(m3)
+
+```
+
+```{r}
+m1<-lm(PCL_SCORE_3MON ~ MSTYN + stable_sg + AGE_AT_COHORT_START + gender + PCL_SCORE,data=byperson)
+summary(m1)
+confint(m1)
+
+m1<-lm(PCL_SCORE_3MON ~ delta_PCL +  MSTYN + stable_sg + AGE_AT_COHORT_START + gender + PCL_SCORE,data=byperson)
+summary(m1)
+
+m1<-lm(PCL_SCORE_3MON ~ delta_PCL +  MSTYN + stable_sg + AGE_AT_COHORT_START + gender + PCL_SCORE + largestDelta,data=byperson)
+summary(m1)
+```
+
+```{r}
+m4<-glm(!is.na(PCL_SCORE_3MON) ~ delta_PCL + MSTYN + as.factor(stable_sg) + AGE_AT_COHORT_START + gender + PCL_SCORE,data=byperson,family="binomial")
+m5<-glm(!is.na(PCL_SCORE_6MON) ~ delta_PCL + MSTYN + stable_sg + AGE_AT_COHORT_START + gender + PCL_SCORE,data=byperson,family="binomial")
+m6<-glm(!is.na(PCL_SCORE_12MON) ~ delta_PCL + MSTYN + stable_sg + AGE_AT_COHORT_START + gender + PCL_SCORE,data=byperson,family="binomial")
+
+table(!is.na(byperson$PCL_SCORE_3MON),byperson$stable_sg)
+chisq.test(!is.na(byperson$PCL_SCORE_3MON),byperson$stable_sg)
+
+summary(m4)
+summary(m5)
+summary(m6)
+
+```
+

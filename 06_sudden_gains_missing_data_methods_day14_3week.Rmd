@@ -1,0 +1,288 @@
+---
+title: "sudden gains with and without imputation"
+author: "ryan schubert"
+date: "2/16/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(suddengains)
+library(data.table)
+library(lme4)
+library(mice)
+library(dplyr)
+library(broom.mixed)
+library(tidyr)
+library(ggplot2)
+library(plotrix)
+library(naniar)
+library(lmerTest)
+"%&%" = function(a,b) paste0(a,b)
+set.seed(1234)
+```
+
+sudden gains literature is inconsistent about reporting missing data and how it handles missing data - some studies have no mention of missing data methods in spite of its ubiquity (wiedemann 2020 ?, sloan 2021 ?), while those that do are inconsistent about how they handle missing data - Commonly studies will exclude patients with a high degree of missing data, but keep patients with a sufficient amount of data to assess sudden gains and treatment outcomes (Kelly 2009, aderka 2021, shalom 2018). Others will perform last observation carried forward method (Doane 2010), complete case analysis (konig 2014 ?) or multiple imputation (shalom 2020). Each of these methods have different sets of assumptions about the mechanism of missingness and it is possible to analysze sudden gains through each of them. We will choose at least one method appriopriate for the two cases of ignorible missingess: complete case analysis + Linear mixed effects model (MCAR), Linear mixed effects models on all sufficient data (MAR) and multiple imputation with generalized estimating equations (MAR). Missing data is an important consideration in sudden gains as different methods of handling missing data carry different assumptions all of which may impact our ability to detect and analyze sudden gains.
+
+
+we will use each of these to approach the identification of sudden gains, the impact of sudden gains on treatment outcomes and the impact of sudden gains on followup.
+
+
+there's differences in how some of these publications are defining their criteria 1 cutoff value
+
+some use the se of difference from RCI (Wiedemann 2020, Doane 2010)
+
+some use the RCI itself (Kelly 2009, Konig 2014, Sloan 2021, Aderka 2021, shalom 2018, shalom 2020)
+
+
+we will use RCI itself
+
+# raw data extraction
+
+```{r}
+out.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/sudden gains/"
+dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/ML project/datasets/3 Week IOP/"
+# list.files(dir)
+rawData<-fread(dir %&% "IOP_DATA_SET_6-12-2020 with Manual Corrections copy.csv" ,na=c("-"))
+# colnames(rawData)[grepl("AGE",colnames(rawData))]
+PCL_Data<-rawData %>% select(one_of("MRN","PAT_ID","PCL_SCORE","PCL_DAY" %&% 1:14,"MSTYN","AGE_AT_COHORT_START","gender")) 
+
+duplicated_PAT_ID<-PCL_Data$PAT_ID[duplicated(PCL_Data$PAT_ID)] %>% unique()
+
+PCL_Data<-PCL_Data %>% filter(!(PAT_ID %in% duplicated_PAT_ID))
+PCL_with_outcome<-PCL_Data %>% filter(!is.na(PCL_DAY14)) %>% filter(!is.na(PCL_SCORE))
+```
+
+# complete case analysis
+
+```{r}
+complete_PCL<-PCL_Data[complete.cases(PCL_Data),]
+cutoff<-define_crit1_cutoff(data_sd=complete_PCL$PCL_SCORE,reliability=0.84)
+vars<-colnames(PCL_Data)[2:11]
+byperson <- create_byperson(data = complete_PCL,
+                    sg_crit1_cutoff=cutoff$reliable_change_value,
+                    id_var_name = "PAT_ID",
+                    tx_start_var_name = "PCL_SCORE",
+                    tx_end_var_name = "PCL_DAY14",
+                    sg_var_list=vars,
+                    identify_sg_1to2=T,
+                    sg_measure_name = "PCL",
+                    identify = "sg")
+byperson$sg_crit123
+table(byperson$sg_reversal)
+byperson <- byperson %>% mutate(stable_sg=if_else(sg_crit123 == 1 & sg_reversal != 1, 1,0))
+table(byperson$stable_sg)
+table(byperson$sg_freq_byperson)
+cutoff$reliable_change_value
+```
+40% of 390 complete cases experienced a stable sudden gain, defined by se of difference
+
+of those that experienced a sudden gain, most (124) experienced only 1, 41 experienced 2, 2 experienced 3, and only 1 experienced 4. In subsequent analyses, the quantity of sudden gains experienced is not analyzed.
+
+32% of of 390 complete cases experienced a stable sudden gain, defined by RCI
+
+of those that experienced a sudden gain, most (115) experienced only 1, 20 experienced 2
+
+```{r}
+
+modeling_data<-byperson %>% select(PAT_ID,contains("PCL"),-contains("sg_"),MSTYN,AGE_AT_COHORT_START,gender,stable_sg)
+
+#try with time as a continuous value
+
+modeling_data_long<-modeling_data %>% 
+  pivot_longer(!c(PAT_ID,MSTYN,AGE_AT_COHORT_START,gender,stable_sg)) %>%
+  mutate(name=case_when(
+    name=="PCL_SCORE" ~ "0",
+    T ~ gsub("PCL_DAY","",name)
+  ),name=as.numeric(name),
+         stable_sg=as.factor(stable_sg)) %>%
+  rename(time="name",pcl="value")
+
+cc_m1<-lmer(pcl ~ time*stable_sg + MSTYN + AGE_AT_COHORT_START + gender + (1 | PAT_ID),data=modeling_data_long)
+cc_m2<-lmer(pcl ~ time*stable_sg + MSTYN + AGE_AT_COHORT_START + gender + (1 + time | PAT_ID),data=modeling_data_long)
+# cc_m3<-lmer(pcl ~ time + stable_sg + MSTYN + AGE_AT_COHORT_START + (1 | PAT_ID),data=modeling_data_long)
+# cc_m4<-lmer(pcl ~ time + stable_sg + MSTYN + AGE_AT_COHORT_START + (1 + time | PAT_ID),data=modeling_data_long)
+
+AIC(cc_m1); BIC(cc_m1)
+AIC(cc_m2); BIC(cc_m2)
+# AIC(cc_m3); BIC(cc_m3)
+# AIC(cc_m4); BIC(cc_m4)
+
+anova(cc_m1)
+anova(cc_m2)
+anova(cc_m1,cc_m2)
+# anova(cc_m3)
+# anova(cc_m4)
+```
+
+so the exact results differ depending on how we parameterize the model, however overall it does appear that sudden gain status has a significant interaction with time. SG itself and covariates are significantly only when treating time as a categorical variable, otherwise not significant.
+
+we will go with the linear mixed model treating time as a continuous variable with random slopes.
+
+lets plot the complete case stuff real quick
+
+```{r}
+byperson %>% 
+  select(PAT_ID,sg_crit123,starts_with("PCL")) %>%
+  pivot_longer(starts_with("PCL")) %>%
+  group_by(name,sg_crit123) %>%
+  summarise(mean_score=mean(value),
+            se_score=std.error(value)) %>%
+  mutate(name=case_when(
+    name=="PCL_SCORE" ~ "0",
+    T ~ gsub("PCL_DAY","",name)
+  ),name=as.numeric(name)) %>%
+  ggplot(aes(x=name,y=mean_score,colour=as.factor(sg_crit123))) +
+  geom_point() +
+  geom_line(aes(group=sg_crit123)) +
+  geom_errorbar(aes(ymin=mean_score-se_score,ymax=mean_score+se_score))
+
+```
+## Sufficient data analysis
+
+following the convention of Aderka 2021 we will keep only people with a minimum of at least one window with at least 5 consecutive sessions as well as has pre and post treatment scores
+
+
+```{r}
+count_not_na<-function(vec){
+  sum(!is.na(vec))
+}
+
+count_not_na_windowise<-function(vec,window=5,n_sess=5){
+  mod<-(length(vec) - window + 1)
+  windowise<-rep(NA,mod)
+  for (i in 1:mod){
+    windowise[i]<-(sum(!is.na(vec[i:(i+window-1)])) >=n_sess)
+  }
+  return(windowise)
+}
+
+summarise_windowise<-function(vec){
+  sum(count_not_na_windowise(vec)) >=1
+}
+summarise_windowise(c(1,1,1,NA,1,1,1,1,1))
+
+available_data<-PCL_Data %>%
+  select(starts_with("PCL")) %>%
+  apply(1,summarise_windowise)
+sufficient_data<-PCL_Data %>% 
+  mutate(not_na=available_data) %>%
+  filter(available_data==T,
+         !is.na(PCL_DAY14),
+         !is.na(PCL_SCORE))
+vis_miss(sufficient_data)
+fwrite(sufficient_data,out.dir %&% "three_week_sufficient_data.csv")
+```
+
+```{r}
+cutoff<-define_crit1_cutoff(data_sd=sufficient_data$PCL_SCORE,reliability=0.84)
+vars<-colnames(PCL_Data)[3:12]
+byperson <- create_byperson(data = sufficient_data,
+                    sg_crit1_cutoff=cutoff$standard_error_difference,
+                    id_var_name = "PAT_ID",
+                    tx_start_var_name = "PCL_SCORE",
+                    tx_end_var_name = "PCL_DAY14",
+                    sg_var_list=vars,
+                    identify_sg_1to2=T,
+                    sg_measure_name = "PCL",
+                    identify = "sg")
+table(byperson$sg_crit123)
+table(byperson$sg_reversal)
+byperson <- byperson %>% mutate(stable_sg=if_else(sg_crit123 == 1 & sg_reversal != 1, 1,0))
+table(byperson$stable_sg)/nrow(byperson)
+table(byperson$sg_freq_byperson)
+cutoff$reliable_change_value
+tapply(byperson$sg_magnitude,byperson$sg_crit123,mean)
+tapply(byperson$sg_magnitude,byperson$sg_crit123,sd)
+tapply(byperson$sg_magnitude,byperson$sg_crit123,median)
+```
+
+similar to the complete case analysis 31% of 465 individuals have a sudden gain as defined by the reliable change index.
+of those with a sudden gain, 135 have only 1 sg and 22 have 2
+
+```{r}
+t.test(PCL_SCORE ~ stable_sg,data=byperson)
+modeling_data<-byperson %>% select(PAT_ID,contains("PCL"),-contains("sg_"),MSTYN,AGE_AT_COHORT_START,gender,stable_sg)
+
+#try with time as a continuous value
+
+modeling_data_long<-modeling_data %>% 
+  pivot_longer(!c(PAT_ID,MSTYN,AGE_AT_COHORT_START,gender,stable_sg)) %>%
+  mutate(name=case_when(
+    name=="PCL_SCORE" ~ "0",
+    T ~ gsub("PCL_DAY","",name)
+  ),name=as.numeric(name),
+         stable_sg=as.factor(stable_sg)) %>%
+  rename(time="name",pcl="value")
+
+cc_m1<-lmer(pcl ~ time*stable_sg + MSTYN + AGE_AT_COHORT_START + gender + (1 | PAT_ID),data=modeling_data_long)
+cc_m2<-lmer(pcl ~ time*stable_sg + MSTYN + AGE_AT_COHORT_START + gender + (1 + time | PAT_ID),data=modeling_data_long)
+# cc_m3<-lmer(pcl ~ time + stable_sg + MSTYN + AGE_AT_COHORT_START + (1 | PAT_ID),data=modeling_data_long)
+# cc_m4<-lmer(pcl ~ time + stable_sg + MSTYN + AGE_AT_COHORT_START + (1 + time | PAT_ID),data=modeling_data_long)
+
+AIC(cc_m1); BIC(cc_m1)
+AIC(cc_m2); BIC(cc_m2)
+# AIC(cc_m3); BIC(cc_m3)
+# AIC(cc_m4); BIC(cc_m4)
+
+anova(cc_m1)
+anova(cc_m2)
+summary(cc_m2)
+anova(cc_m1,cc_m2)
+# anova(cc_m3)
+# anova(cc_m4)
+```
+
+```{r}
+byperson %>% 
+  select(PAT_ID,sg_crit123,starts_with("PCL")) %>%
+  pivot_longer(starts_with("PCL")) %>%
+  group_by(name,sg_crit123) %>%
+  summarise(mean_score=mean(value,na.rm=T),
+            se_score=std.error(value,na.rm=T)) %>%
+  mutate(name=case_when(
+    name=="PCL_SCORE" ~ "0",
+    T ~ gsub("PCL_DAY","",name)
+  ),name=as.numeric(name)) %>%
+  ggplot(aes(x=name,y=mean_score,colour=as.factor(sg_crit123))) +
+  geom_point() +
+  geom_line(aes(group=sg_crit123)) +
+  geom_errorbar(aes(ymin=mean_score-se_score,ymax=mean_score+se_score))
+
+```
+
+## Imputation assessment 
+
+```{r}
+imputations<-10
+preimpute_data<-PCL_Data[,-c(1)]
+mData<-mice(preimpute_data,m=imputations)
+lmm_list<-vector(mode="list",length=imputations)
+for (i in 1:imputations){
+  complete_data<-cbind.data.frame(PCL_Data$PAT_ID,complete(mData,i)) %>% rename_with(.cols=1,.fn=function(x){return("PAT_ID")})
+  cutoff<-define_crit1_cutoff(data_sd=complete_data$PCL_SCORE,reliability=0.84)
+  vars<-colnames(complete_data)[2:11]
+  byperson <- create_byperson(data = complete_data,
+                      sg_crit1_cutoff=cutoff$reliable_change_value,
+                      id_var_name = "PAT_ID",
+                      tx_start_var_name = "PCL_SCORE",
+                      tx_end_var_name = "PCL_DAY14",
+                      sg_var_list=vars,
+                      identify_sg_1to2=T,
+                      sg_measure_name = "PCL",
+                      identify = "sg")
+  byperson <- byperson %>% mutate(stable_sg=if_else(sg_crit123 == 1 & sg_reversal != 1, 1,0))
+  modeling_data<-byperson %>% select(PAT_ID,contains("PCL"),-contains("sg_"),MSTYN,AGE_AT_COHORT_START,gender,stable_sg)
+  modeling_data_long<-modeling_data %>% 
+  pivot_longer(!c(PAT_ID,MSTYN,AGE_AT_COHORT_START,gender,stable_sg)) %>%
+  mutate(name=case_when(
+    name=="PCL_SCORE" ~ "0",
+    T ~ gsub("PCL_DAY","",name)
+  ),name=as.numeric(name),
+         stable_sg=as.factor(stable_sg)) %>%
+  rename(time="name",pcl="value")
+  lmm_list[[i]]<-lmer(pcl ~ time*stable_sg + MSTYN + AGE_AT_COHORT_START + gender + (1 + time | PAT_ID),data=modeling_data_long)
+}
+summary(pool(lmm_list),conf.int=T)
+```
+
+

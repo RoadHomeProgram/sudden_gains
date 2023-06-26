@@ -1,0 +1,363 @@
+---
+title: "two sample ttest compare our data to wiedemann and sloan"
+author: "ryan schubert"
+date: "4/4/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+"%&%" = function(a,b) paste0(a,b)
+```
+
+## R Markdown
+
+
+Sloan - pcl
+In their WET sample: n=13/63, mean= 22.23, SD = 6.1, 
+In their CPT sample: n=11/63, mean= 20.73, SD = 4.9
+
+
+Wiedemann uses PDS, which is out of a total of 51.
+Wiedemann Sample 1: n= 76/248 mean= 12.30, SD= 4.44
+Wiedemann Sample 2: n= 87/234 mean= 12.11 SD= 3.83
+
+3 week sample
+n=146/465,mean=21.23288,sd=6.693323
+
+2 week sample
+n=44/235 mean=21.3617 sd=5.027859
+
+
+# 3week vs sloan
+```{r cars}
+# 3 week vs WET
+mu_3W=21.23288
+n_3W=146
+sd_3W=6.693323
+
+mu_SWET=22.23
+n_SWET=13
+sd_SWET=6.1
+
+mu_SCPT=20.73
+n_SCPT=11
+sd_SCPT=4.9
+
+delta_mu=mu_3W-mu_SWET
+s1<-(sd_3W^2)/n_3W
+s2<-(sd_SWET^2)/n_SWET
+denom=sqrt(s1+s2)
+(t=delta_mu/denom)
+df_num=(s1+s2)^2
+df_den=(sd_3W^4)/((n_3W^2)*(n_3W-1)) + (sd_SWET^4)/((n_SWET^2)*(n_SWET-1))
+df1<-df_num/df_den
+2*pt(t,df1,lower.tail=T)
+
+delta_mu=mu_3W-mu_SCPT
+s1<-(sd_3W^2)/n_3W
+s2<-(sd_SCPT^2)/n_SCPT
+denom=sqrt(s1+s2)
+(t=delta_mu/denom)
+df_num=(s1+s2)^2
+df_den=(sd_3W^4)/((n_3W^2)*(n_3W-1)) + (sd_SCPT^4)/((n_SCPT^2)*(n_SCPT-1))
+df1<-df_num/df_den
+2*pt(t,df1,lower.tail=F)
+```
+
+3 week not significantly different from wet or CPT in sloan
+
+#2 week vs slaon
+```{r}
+mu_2W=21.3617
+n_2W=44
+sd_2W=5.027859
+
+delta_mu=mu_2W-mu_SWET
+s1<-(sd_2W^2)/n_2W
+s2<-(sd_SWET^2)/n_SWET
+denom=sqrt(s1+s2)
+(t=delta_mu/denom)
+df_num=(s1+s2)^2
+df_den=(sd_2W^4)/((n_2W^2)*(n_2W-1)) + (sd_SWET^4)/((n_SWET^2)*(n_SWET-1))
+df1<-df_num/df_den
+2*pt(t,df1,lower.tail=T)
+
+delta_mu=mu_2W-mu_SCPT
+s1<-(sd_2W^2)/n_2W
+s2<-(sd_SCPT^2)/n_SCPT
+denom=sqrt(s1+s2)
+(t=delta_mu/denom)
+df_num=(s1+s2)^2
+df_den=(sd_2W^4)/((n_2W^2)*(n_2W-1)) + (sd_SCPT^4)/((n_SCPT^2)*(n_SCPT-1))
+df1<-df_num/df_den
+2*pt(t,df1,lower.tail=F)
+
+```
+2week not signif different from wet or cpt in sloan
+
+
+
+# 3 week vs wiedemann
+```{r}
+mu_3W=21.23288/80
+n_3W=146
+sd_3W=6.693323/80
+
+n_WS1=76 
+mu_WS1=12.30/51
+sd_WS1= 4.44/51
+
+n_WS2= 87 
+mu_WS2= 12.11/51
+sd_WS2= 3.83/51
+
+delta_mu=mu_3W-mu_WS1
+s1<-(sd_3W^2)/n_3W
+s2<-(sd_WS1^2)/n_WS1
+denom=sqrt(s1+s2)
+(t=delta_mu/denom)
+df_num=(s1+s2)^2
+df_den=(sd_3W^4)/((n_3W^2)*(n_3W-1)) + (sd_WS1^4)/((n_WS1^2)*(n_WS1-1))
+df1<-df_num/df_den
+2*pt(t,df1,lower.tail=F)
+
+delta_mu=mu_3W-mu_WS2
+s1<-(sd_3W^2)/n_3W
+s2<-(sd_WS2^2)/n_WS2
+denom=sqrt(s1+s2)
+(t=delta_mu/denom)
+df_num=(s1+s2)^2
+df_den=(sd_3W^4)/((n_3W^2)*(n_3W-1)) + (sd_WS2^4)/((n_WS2^2)*(n_WS2-1))
+df1<-df_num/df_den
+2*pt(t,df1,lower.tail=F)
+```
+
+```{r}
+mu_3W=19.33161/80
+n_3W=193
+sd_3W=6.96598/80
+
+n_WS1=76 
+mu_WS1=12.30/51
+sd_WS1= 4.44/51
+
+n_WS2= 87 
+mu_WS2= 12.11/51
+sd_WS2= 3.83/51
+
+delta_mu=mu_3W-mu_WS1
+s1<-(sd_3W^2)/n_3W
+s2<-(sd_WS1^2)/n_WS1
+denom=sqrt(s1+s2)
+(t=delta_mu/denom)
+df_num=(s1+s2)^2
+df_den=(sd_3W^4)/((n_3W^2)*(n_3W-1)) + (sd_WS1^4)/((n_WS1^2)*(n_WS1-1))
+df1<-df_num/df_den
+2*pt(t,df1,lower.tail=F)
+
+delta_mu=mu_3W-mu_WS2
+s1<-(sd_3W^2)/n_3W
+s2<-(sd_WS2^2)/n_WS2
+denom=sqrt(s1+s2)
+(t=delta_mu/denom)
+df_num=(s1+s2)^2
+df_den=(sd_3W^4)/((n_3W^2)*(n_3W-1)) + (sd_WS2^4)/((n_WS2^2)*(n_WS2-1))
+df1<-df_num/df_den
+2*pt(t,df1,lower.tail=F)
+```
+
+```{r}
+mu_2W=21.3617/80
+n_2W=44
+sd_2W=5.027859/80
+
+delta_mu=mu_2W-mu_WS1
+s1<-(sd_2W^2)/n_2W
+s2<-(sd_WS1^2)/n_WS1
+denom=sqrt(s1+s2)
+(t=delta_mu/denom)
+df_num=(s1+s2)^2
+df_den=(sd_2W^4)/((n_2W^2)*(n_2W-1)) + (sd_WS1^4)/((n_WS1^2)*(n_WS1-1))
+df1<-df_num/df_den
+2*pt(t,df1,lower.tail=F)
+
+delta_mu=mu_2W-mu_WS2
+s1<-(sd_2W^2)/n_2W
+s2<-(sd_WS2^2)/n_WS2
+denom=sqrt(s1+s2)
+(t=delta_mu/denom)
+df_num=(s1+s2)^2
+df_den=(sd_2W^4)/((n_2W^2)*(n_2W-1)) + (sd_WS2^4)/((n_WS2^2)*(n_WS2-1))
+df1<-df_num/df_den
+2*pt(t,df1,lower.tail=F)
+```
+
+
+```{r}
+mu_2W=17.85897/80
+n_2W=78
+sd_2W=5.945039/80
+
+delta_mu=mu_2W-mu_WS1
+s1<-(sd_2W^2)/n_2W
+s2<-(sd_WS1^2)/n_WS1
+denom=sqrt(s1+s2)
+(t=delta_mu/denom)
+df_num=(s1+s2)^2
+df_den=(sd_2W^4)/((n_2W^2)*(n_2W-1)) + (sd_WS1^4)/((n_WS1^2)*(n_WS1-1))
+df1<-df_num/df_den
+2*pt(t,df1,lower.tail=T)
+
+delta_mu=mu_2W-mu_WS2
+s1<-(sd_2W^2)/n_2W
+s2<-(sd_WS2^2)/n_WS2
+denom=sqrt(s1+s2)
+(t=delta_mu/denom)
+df_num=(s1+s2)^2
+df_den=(sd_2W^4)/((n_2W^2)*(n_2W-1)) + (sd_WS2^4)/((n_WS2^2)*(n_WS2-1))
+df1<-df_num/df_den
+2*pt(t,df1,lower.tail=T)
+```
+
+
+# Z tests for proportion
+
+3week vs sloan
+
+```{r}
+h_3W=146
+n_3W=465
+
+h_SWET=13
+n_SWET=63
+
+p_hat=(h_3W+h_SWET)/(n_3W+n_SWET)
+
+p_3W=h_3W/n_3W
+p_SWET=h_SWET/n_SWET
+
+denom=sqrt(p_hat*(1-p_hat)*((1/n_SWET) + (1/n_3W)))
+Z=(p_3W-p_SWET)/denom
+pnorm(Z,lower.tail = F)
+
+h_3W=146
+n_3W=465
+
+h_SCPT=11
+n_SCPT=63
+
+p_hat=(h_3W+h_SCPT)/(n_3W+n_SCPT)
+
+p_3W=h_3W/n_3W
+p_SCPT=h_SCPT/n_SCPT
+
+denom=sqrt(p_hat*(1-p_hat)*((1/n_SCPT) + (1/n_3W)))
+Z=(p_3W-p_SCPT)/denom
+pnorm(Z,lower.tail = F)
+```
+
+2week vs sloan
+
+```{r}
+h_2W=44
+n_2W=235
+
+h_SWET=13
+n_SWET=63
+
+p_hat=(h_2W+h_SWET)/(n_2W+n_SWET)
+
+p_2W=h_2W/n_2W
+p_SWET=h_SWET/n_SWET
+
+denom=sqrt(p_hat*(1-p_hat)*((1/n_SWET) + (1/n_2W)))
+Z=(p_2W-p_SWET)/denom
+pnorm(Z,lower.tail = F)
+
+h_2W=44
+n_2W=235
+
+h_SCPT=11
+n_SCPT=63
+
+p_hat=(h_2W+h_SCPT)/(n_2W+n_SCPT)
+
+p_2W=h_2W/n_2W
+p_SCPT=h_SCPT/n_SCPT
+
+denom=sqrt(p_hat*(1-p_hat)*((1/n_SCPT) + (1/n_2W)))
+Z=(p_2W-p_SCPT)/denom
+pnorm(Z,lower.tail = F)
+```
+
+
+3week vs wiedemann
+
+```{R}
+h_3W=146
+n_3W=465
+
+h_WS1=76
+n_WS1=248
+
+p_hat=(h_3W+h_WS1)/(n_3W+n_WS1)
+
+p_3W=h_3W/n_3W
+p_WS1=h_WS1/n_WS1
+
+denom=sqrt(p_hat*(1-p_hat)*((1/n_WS1) + (1/n_3W)))
+Z=(p_3W-p_WS1)/denom
+pnorm(Z,lower.tail = F)
+
+h_3W=146
+n_3W=465
+
+h_WS2=87
+n_WS2=234
+
+p_hat=(h_3W+h_WS2)/(n_3W+n_WS2)
+
+p_3W=h_3W/n_3W
+p_WS2=h_WS2/n_WS2
+
+denom=sqrt(p_hat*(1-p_hat)*((1/n_WS2) + (1/n_3W)))
+Z=(p_3W-p_WS2)/denom
+pnorm(Z,lower.tail = T)
+
+```
+
+2week vs wiedemann
+
+```{R}
+h_2W=44
+n_2W=235
+
+h_WS1=76
+n_WS1=248
+
+p_hat=(h_2W+h_WS1)/(n_2W+n_WS1)
+
+p_2W=h_2W/n_2W
+p_WS1=h_WS1/n_WS1
+
+denom=sqrt(p_hat*(1-p_hat)*((1/n_WS1) + (1/n_2W)))
+Z=(p_2W-p_WS1)/denom
+pnorm(Z,lower.tail = T)
+
+h_2W=44
+n_2W=235
+
+h_WS2=87
+n_WS2=234
+
+p_hat=(h_2W+h_WS2)/(n_2W+n_WS2)
+
+p_2W=h_2W/n_2W
+p_WS2=h_WS2/n_WS2
+
+denom=sqrt(p_hat*(1-p_hat)*((1/n_WS2) + (1/n_2W)))
+Z=(p_2W-p_WS2)/denom
+pnorm(Z,lower.tail = T)
+
+```
+

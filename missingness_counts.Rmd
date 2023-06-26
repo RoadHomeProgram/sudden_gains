@@ -1,0 +1,96 @@
+---
+title: "missingness counts and percentages"
+author: "ryan schubert"
+date: "6/7/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(naniar)
+"%&%" = function(a,b) paste0(a,b)
+set.seed(1234)
+```
+
+
+```{r}
+count_not_na<-function(vec){
+  sum(!is.na(vec))
+}
+
+count_not_na_windowise<-function(vec,window=5,n_sess=5){
+  mod<-(length(vec) - window + 1)
+  windowise<-rep(NA,mod)
+  for (i in 1:mod){
+    windowise[i]<-(sum(!is.na(vec[i:(i+window-1)])) >=n_sess)
+  }
+  return(windowise)
+}
+
+summarise_windowise<-function(vec){
+  sum(count_not_na_windowise(vec)) >=1
+}
+```
+
+```{r}
+out.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/sudden gains/"
+dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/ML project/datasets/3 Week IOP/"
+# list.files(dir)
+rawData<-fread(dir %&% "IOP_DATA_SET_6-12-2020 with Manual Corrections copy.csv" ,na=c("-",''))
+# colnames(rawData)[grepl("AGE",colnames(rawData))]
+PCL_Data<-rawData %>% select(one_of("PAT_ID","PCL_SCORE","PCL_DAY" %&% 1:14,"MSTYN","AGE_AT_COHORT_START","gender","FirstRace","Ethnicity",'Branch','Education_Level')) 
+
+duplicated_PAT_ID<-PCL_Data$PAT_ID[duplicated(PCL_Data$PAT_ID)] %>% unique()
+
+PCL_Data<-PCL_Data %>% filter(!(PAT_ID %in% duplicated_PAT_ID))
+PCL_with_outcome<-PCL_Data %>% filter(!is.na(PCL_DAY14))
+```
+
+```{R}
+
+#summarise_windowise(c(1,1,1,NA,1,1,1,1,1))
+
+available_data<-PCL_Data %>%
+  select(starts_with("PCL")) %>%
+  apply(1,summarise_windowise)
+sufficient_data<-PCL_Data %>% 
+  mutate(not_na=available_data) %>%
+  filter(available_data==T,
+         !is.na(PCL_DAY14),
+         !is.na(PCL_SCORE))
+vis_miss(sufficient_data)
+table(sufficient_data$Branch,useNA = 'always')
+table(sufficient_data$Ethnicity,useNA = 'always')
+```
+
+```{r}
+out.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/sudden gains/"
+dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/2week/"
+list.files(dir)
+rawData<-fread(dir %&% "Two_week_with_CAPS_2_25_22_extended.csv" ,na=c("-"))
+colnames(rawData)[grepl("pcl5_score",colnames(rawData),ignore.case=T)]
+PCL_Data<-rawData %>% select(mrn,contains("pcl5_score"),contains("mst"),Age,Sex,cohort_type_base,`Education Level`,`Last or Current Branch`,`FirstRace (group)`,Ethnicity) %>%
+  select(-contains("followup")) %>%
+  mutate(MSTYN=case_when(
+    !is.na(mst1_base) & mst1_base == 1 ~ 1,
+    !is.na(mst2_base) & mst2_base == 1 ~ 1,
+    !is.na(mst3_base) & mst3_base == 1 ~ 1,
+    !is.na(cohort_type_base) & cohort_type_base == 2 ~ 1,
+    T ~ 0
+  ))
+duplicated_mrn<-PCL_Data$mrn[duplicated(PCL_Data$mrn)] %>% unique()
+
+PCL_Data<-PCL_Data %>% filter(!(mrn %in% duplicated_mrn))
+PCL_with_outcome<-PCL_Data %>% filter(!is.na(pcl5_score_post))
+
+available_data<-PCL_Data %>%
+  select(starts_with("pcl")) %>%
+  apply(1,summarise_windowise)
+sufficient_data<-PCL_Data %>% 
+  mutate(not_na=available_data) %>%
+  filter(available_data==T,
+         !is.na(pcl5_score_post),
+         !is.na(pcl5_score_pastmonth_base))
+vis_miss(sufficient_data)
+table(sufficient_data$Ethnicity)
+```

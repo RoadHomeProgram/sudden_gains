@@ -1,0 +1,195 @@
+---
+title: "07_sudden_gains_in_two_week"
+author: "ryan schubert"
+date: "2/24/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(suddengains)
+library(data.table)
+library(lme4)
+library(mice)
+library(dplyr)
+library(broom.mixed)
+library(tidyr)
+library(ggplot2)
+library(plotrix)
+library(naniar)
+library(lmerTest)
+library(car)
+"%&%" = function(a,b) paste0(a,b)
+set.seed(1234)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+out.dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/sudden gains/"
+dir<-"/Users/ryanschubert/Dropbox/Ryan's stuff/rush/2week/"
+list.files(dir)
+rawData<-fread(dir %&% "Two_week_with_CAPS_2_17_22_extended.csv" ,na=c("-"))
+colnames(rawData)[grepl("pcl5_score",colnames(rawData),ignore.case=T)]
+PCL_Data<-rawData %>% select(mrn,contains("pcl5_score"),contains("mst"),Age,Sex,cohort_type_base) %>%
+  select(-contains('followup')) %>%
+  mutate(MSTYN=case_when(
+    !is.na(mst1_base) & mst1_base == 1 ~ 1,
+    !is.na(mst2_base) & mst2_base == 1 ~ 1,
+    !is.na(mst3_base) & mst3_base == 1 ~ 1,
+    !is.na(cohort_type_base) & cohort_type_base == 2 ~ 1,
+    T ~ 0
+  ))
+duplicated_mrn<-PCL_Data$mrn[duplicated(PCL_Data$mrn)] %>% unique()
+
+PCL_Data<-PCL_Data %>% filter(!(mrn %in% duplicated_mrn))
+PCL_with_outcome<-PCL_Data %>% filter(!is.na(pcl5_score_post)) %>%
+  filter(!is.na(pcl5_score_pastmonth_base))
+vis_miss(PCL_with_outcome)
+```
+
+
+```{r}
+count_not_na<-function(vec){
+  sum(!is.na(vec))
+}
+
+count_not_na_windowise<-function(vec,window=5,n_sess=5){
+  mod<-(length(vec) - window + 1)
+  windowise<-rep(NA,mod)
+  for (i in 1:mod){
+    windowise[i]<-(sum(!is.na(vec[i:(i+window-1)])) >=n_sess)
+  }
+  return(windowise)
+}
+
+largestChange<-function(vec){
+  mod<-(length(vec) - 1)
+  windowise<-rep(NA,mod)
+  for (i in 1:mod){
+    windowise[i]<-(vec[i] - vec[(i+1)])
+  }
+  return(max(windowise,na.rm=T))
+}
+
+summarise_windowise<-function(vec){
+  sum(count_not_na_windowise(vec)) >=1
+}
+summarise_windowise(c(1,1,1,NA,1,1,1,1,1))
+
+available_data<-PCL_Data %>%
+  select(starts_with("pcl")) %>%
+  apply(1,summarise_windowise)
+sufficient_data<-PCL_Data %>% 
+  mutate(not_na=available_data) %>%
+  filter(available_data==T,
+         !is.na(pcl5_score_pastmonth_base),
+         !is.na(pcl5_score_post))
+vis_miss(sufficient_data)
+fwrite(sufficient_data,out.dir %&% "two_week_sufficient_data.csv")
+```
+
+
+```{r}
+cutoff<-define_crit1_cutoff(data_sd=sufficient_data$pcl5_score_pastmonth_base,reliability=0.84)
+vars<-colnames(PCL_Data)[2:8]
+byperson <- create_byperson(data = sufficient_data,
+                    sg_crit1_cutoff=cutoff$reliable_change_value,
+                    id_var_name = "mrn",
+                    tx_start_var_name = "pcl5_score_pastmonth_base",
+                    tx_end_var_name = "pcl5_score_post",
+                    sg_var_list=vars,
+                    identify_sg_1to2=T,
+                    sg_measure_name = "PCL",
+                    identify = "sg")
+table(byperson$sg_crit123)
+table(byperson$sg_reversal)
+byperson <- byperson %>% mutate(stable_sg=if_else(sg_crit123 == 1 & sg_reversal != 1, 1,0))
+table(byperson$stable_sg)
+table(byperson$stable_sg)/nrow(byperson)
+table(byperson$sg_freq_byperson,byperson$stable_sg)
+cutoff$reliable_change_value
+table(byperson$sg_session_n)
+summary(byperson$sg_session_n)
+h_two_week<-table(byperson$sg_session_n) %>%
+  as.data.frame() %>%
+  mutate(Var1=case_when(
+    Var1== 1 ~ 1,
+    Var1== 2 ~ 3,
+    Var1== 3 ~ 5,
+    Var1== 4 ~ 6
+      ), Var1=as.factor(Var1)) %>%
+  ggplot(aes(x=Var1,y=Freq)) +
+  geom_col() + 
+  theme_bw() +
+  xlab("Day Sudden Gain Experienced") +
+  ylab("Count")
+h_two_week
+tapply(byperson$sg_magnitude,byperson$sg_crit123,mean)
+tapply(byperson$sg_magnitude,byperson$sg_crit123,sd)
+tapply(byperson$sg_magnitude,byperson$sg_crit123,median)
+```
+
+
+```{r}
+t.test(pcl5_score_pastmonth_base ~ stable_sg,data=byperson)
+modeling_data<-byperson %>% select(mrn,contains("pcl"),-contains("sg_"),MSTYN,Age,Sex,stable_sg)
+
+#try with time as a continuous value
+
+modeling_data_long<-modeling_data %>% 
+  pivot_longer(!c(mrn,MSTYN,Age,Sex,stable_sg))  %>%
+  mutate(name=case_when(
+    name == "pcl5_score_pastmonth_base" ~ 0,
+    name == "pcl5_score_monday_week_1" ~ 1,
+    name == "pcl5_score_wednesday_week_1" ~ 3,
+    name == "pcl5_score_friday_week_1" ~ 5,
+    name == "pcl5_score_monday_week_2" ~ 6,
+    name == "pcl5_score_wednesday_week_2" ~ 8,
+    name == "pcl5_score_post" ~ 10),
+    stable_sg=as.factor(stable_sg)) %>%
+  rename(time="name",pcl="value")
+
+cc_m1<-lmer(pcl ~ time*stable_sg + MSTYN + Age + Sex + (1 | mrn),data=modeling_data_long)
+cc_m2<-lmer(pcl ~ time*stable_sg + MSTYN + Age + Sex + (1 + time | mrn),data=modeling_data_long)
+# cc_m3<-lmer(pcl ~ time + stable_sg + MSTYN + Age + (1 | mrn),data=modeling_data_long)
+# cc_m4<-lmer(pcl ~ time + stable_sg + MSTYN + Age + (1 + time | mrn),data=modeling_data_long)
+
+AIC(cc_m1); BIC(cc_m1)
+AIC(cc_m2); BIC(cc_m2)
+# AIC(cc_m3); BIC(cc_m3)
+# AIC(cc_m4); BIC(cc_m4)
+
+anova(cc_m1)
+anova(cc_m2)
+summary(cc_m2)
+anova(cc_m1,cc_m2)
+# anova(cc_m3)
+# anova(cc_m4)
+```
+
+
+```{r}
+largestDelta<-data.frame(mrn=PCL_Data$mrn,largestDelta=apply(PCL_Data[,2:8],1,largestChange))
+followup<-rawData %>% select(mrn,contains("pcl5_score")) %>% select(mrn,contains("followup")) %>%
+  filter(!is.na(pcl5_score_pastmonth_3_month_followup))
+check_followup<-byperson %>% inner_join(followup,by=c("mrn"))  %>% inner_join(largestDelta,by=c('mrn'))
+check_followup <- mutate(check_followup,delta_PCL=pcl5_score_pastmonth_base-pcl5_score_post)
+
+table(!is.na(check_followup$pcl5_score_pastmonth_3_month_followup),check_followup$stable_sg)
+
+followup_model<-lm(pcl5_score_pastmonth_3_month_followup ~ MSTYN + Age + Sex + stable_sg + pcl5_score_pastmonth_base,data=check_followup)
+summary(followup_model)
+
+followup_model<-lm(pcl5_score_pastmonth_3_month_followup ~ MSTYN + Age + Sex + stable_sg + pcl5_score_pastmonth_base + delta_PCL,data=check_followup)
+summary(followup_model)
+vif(followup_model)
+
+followup_model<-lm(pcl5_score_pastmonth_3_month_followup ~ MSTYN + Age + Sex + stable_sg + pcl5_score_pastmonth_base + delta_PCL + largestDelta,data=check_followup)
+summary(followup_model)
+```
+
+
